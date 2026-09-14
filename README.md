@@ -1,4 +1,7 @@
-# ⚡ Google Flow CLI & Chrome Extension Bridge
+# ⚡ Google Flow CLI & Chrome Extension Bridge (Unofficial)
+
+> **⚠️ Disclaimer**: This is an independent open-source project and is **not affiliated with, endorsed by, or sponsored by Google LLC**.  
+> 본 프로젝트는 개인의 작업 생산성 향상을 위한 **비공식(Unofficial)** 도구입니다.
 
 [Google Flow (Flow Studio)](https://labs.google/fx/tools/flow)를 터미널 CLI 및 AI 에이전트(MCP)에서 손쉽게 제어할 수 있도록 해주는 크롬 익스텐션 & CLI 브리지 프로젝트입니다.
 
@@ -211,6 +214,15 @@ flow_output/
 | **Chrome Extension이 연결되지 않음** | 1. 크롬에서 `chrome://extensions` 접속 후 익스텐션 새로고침(🔄)<br>2. 익스텐션 팝업을 열어 브리지 포트(`58231`)가 일치하는지 확인 |
 | **Flow 탭을 찾을 수 없음** | 크롬 브라우저에서 `https://labs.google/fx/tools/flow` 페이지를 열고 로그인되어 있는지 확인하세요. |
 | **모델 또는 프롬프트 입력창을 찾지 못함** | Flow 웹페이지가 프로젝트 내부(`https://labs.google/fx/tools/flow/project/...`)인지 확인하고 페이지 새로고침(F5)을 해주세요. |
+
+---
+
+## ⚖️ 면책 조항 및 정책 안내 (Disclaimer & Notice)
+
+- **비공식 프로젝트 (Unofficial)**: 본 프로젝트는 독립적인 오픈소스 도구이며, **Google LLC 또는 Alphabet Inc.와 어떠한 제휴, 후원, 보증 관계도 없습니다.**
+- **상표권 (Trademarks)**: "Google", "Google Flow" 및 관련 명칭은 Google LLC의 등록 상표입니다.
+- **약관 준수 (Terms of Service)**: 본 도구를 사용할 때 [Google 서비스 약관](https://policies.google.com/terms) 및 [Google Generative AI 금지된 사용 정책](https://policies.google.com/terms/generative-ai/use-policy)을 준수할 책임은 전적으로 사용자에게 있습니다.
+- **공정 이용 (Fair Use)**: 본 도구는 개인의 작업 편의와 개발 연구를 위해 제작되었습니다. 무차별적인 대량 스크래핑이나 남용은 구글 보안 시스템에 의해 계정 이용 제한을 유발할 수 있으므로 권장하지 않습니다.
 
 ---
 
