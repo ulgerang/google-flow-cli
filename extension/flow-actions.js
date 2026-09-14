@@ -718,6 +718,123 @@ const FlowActions = {
   },
 
   /**
+   * Attach a reference image (ingredient) to the prompt box without native file
+   * pickers: the local file is converted to a File object and delivered through
+   * synthesized drag-and-drop (Flow advertises "drop media here") and, as a
+   * fallback, a paste event on the ProseMirror prompt box.
+   */
+  async addIngredientFromDataUrl(dataUrl, name = 'reference.png') {
+    const editor = document.querySelector('div.ProseMirror[contenteditable="true"]');
+    if (!editor) throw new Error('Prompt box not found — open a project first');
+
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    if (!/^image\//.test(blob.type)) {
+      throw new Error(`Only image references are supported, got ${blob.type || 'unknown type'}`);
+    }
+    const file = new File([blob], name, { type: blob.type });
+
+    // The prompt bar container reacts to drops; the editor itself is only the
+    // text layer, so target its prompt-bar ancestor.
+    const promptBar =
+      editor.closest('[aria-label*="프롬프트"], [class*="prompt"], form') ||
+      editor.parentElement?.parentElement ||
+      editor;
+
+    const countIngredientImgs = () => {
+      const box = promptBar.closest('body') || document;
+      // ingredient previews render as <img> thumbnails inside the prompt bar
+      return promptBar.querySelectorAll('img').length;
+    };
+    const beforeCount = countIngredientImgs();
+
+    const fireDataTransferEvent = (target, type) => {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      dt.dropEffect = 'copy';
+      const ev = new DragEvent(type, { bubbles: true, cancelable: true, composed: true });
+      Object.defineProperty(ev, 'dataTransfer', { value: dt });
+      target.dispatchEvent(ev);
+    };
+
+    // 1) drag-and-drop sequence on the prompt bar and the editor
+    for (const target of [promptBar, editor]) {
+      fireDataTransferEvent(target, 'dragenter');
+      await this.delay(100);
+      fireDataTransferEvent(target, 'dragover');
+      await this.delay(100);
+      fireDataTransferEvent(target, 'drop');
+      await this.delay(700);
+    }
+
+    let added = countIngredientImgs() > beforeCount;
+
+    // 2) paste fallback on the focused editor
+    if (!added) {
+      editor.focus();
+      await this.delay(200);
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(pasteEvent, 'clipboardData', { value: dt });
+      editor.dispatchEvent(pasteEvent);
+      await this.delay(1500);
+      added = countIngredientImgs() > beforeCount;
+    }
+
+    if (!added) {
+      throw new Error(
+        'Reference image was not attached — Flow did not react to the synthetic drop/paste events'
+      );
+    }
+
+    return { added: true, name, size: blob.size, mimeType: blob.type };
+  },
+
+  /**
+   * Find newly generated tiles for ingredient-based (reference) generations.
+   * The project grid labels output tiles with a title derived from the prompt,
+   * while uploaded reference files are labeled with their file name. We score
+   * word overlap between the prompt and each tile label to tell them apart.
+   */
+  findGeneratedTiles(prompt, baselineKeys) {
+    const stop = new Set(['this', 'that', 'with', 'from', 'into', 'make', 'make', 'a', 'an', 'the', 'of', 'in', 'on', 'to', 'and', 'for', 'version', 'image']);
+    const words = (prompt || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9가-힣\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !stop.has(w));
+    const distinctive = [...new Set(words)].slice(0, 12);
+
+    const items = this.getMediaItems().filter((i) => !baselineKeys.includes(i.src));
+    if (items.length === 0) return [];
+
+    const scored = items.map((item) => {
+      // Find the tile label near the image
+      const img = Array.from(document.querySelectorAll('img')).find(
+        (im) => (im.currentSrc || im.src || '') === item.src
+      );
+      let label = '';
+      if (img) {
+        let el = img.parentElement;
+        for (let d = 0; d < 6 && el && !label; d++) {
+          const t = (el.textContent || '').trim();
+          if (t.length > 3 && !/\.(jpg|jpeg|png|webp)$/i.test(t)) {
+            label = t.replace(/\s+/g, ' ').toLowerCase();
+          }
+          el = el.parentElement;
+        }
+      }
+      const hits = distinctive.filter((w) => label.includes(w)).length;
+      return { item, label, hits };
+    });
+
+    const minHits = distinctive.length >= 2 ? 2 : 1;
+    const matched = scored.filter((s) => s.hits >= minHits && !/\.(jpg|jpeg|png|webp)$/i.test(s.label));
+    return matched.map((s) => s.item);
+  },
+
+  /**
    * Debug helper: snapshot the current DOM structure relevant to automation.
    * Helps diagnose selector drift when Google updates the Flow UI.
    */
@@ -766,6 +883,28 @@ const FlowActions = {
         }));
     }
 
+    if (options.tiles) {
+      result.tiles = Array.from(document.querySelectorAll('img'))
+        .filter((img) => img.naturalWidth > 100 || img.width > 100)
+        .slice(0, 20)
+        .map((img) => {
+          let el = img.parentElement;
+          let label = '';
+          for (let d = 0; d < 6 && el; d++) {
+            const t = (el.textContent || '').trim();
+            if (t.length > 3 && t !== (img.alt || '')) {
+              label = t.replace(/\s+/g, ' ').slice(0, 80);
+              break;
+            }
+            el = el.parentElement;
+          }
+          return {
+            src: (img.currentSrc || img.src || '').slice(0, 90),
+            label
+          };
+        });
+    }
+
     result.projectLinks = Array.from(document.querySelectorAll('a[href*="/project/"]'))
       .map((a) => a.href)
       .filter((v, i, arr) => arr.indexOf(v) === i)
@@ -779,6 +918,17 @@ const FlowActions = {
         w: img.width,
         h: img.height
       }));
+
+    if (options.promptBarHtml) {
+      const editor = document.querySelector('div.ProseMirror[contenteditable="true"]');
+      const levels = [];
+      let node = editor && editor.closest('flow-rich-text-editor');
+      for (let i = 0; node && i < 4; i++) {
+        node = node.parentElement;
+        if (node) levels.push(`<=== level ${i + 1} <${node.tagName.toLowerCase()} class="${node.className}">>\n${node.outerHTML.slice(0, 2500)}`);
+      }
+      result.promptBarHtml = levels.join('\n\n');
+    }
 
     result.mediaImgs = this.getMediaUuids().length;
 

@@ -1,8 +1,10 @@
+import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 import ora from 'ora';
 import { BridgeClient } from '../bridge/client.js';
 import { saveMediaItem } from '../utils/file-saver.js';
+import { loadRefImage } from '../utils/ref-image.js';
 import { DEFAULT_CONFIG } from '../config/default-config.js';
 
 export async function handleImage(prompt, options = {}) {
@@ -11,6 +13,7 @@ export async function handleImage(prompt, options = {}) {
     process.exit(1);
   }
 
+  const refs = (options.ref || []).map(loadRefImage);
   const model = options.model || DEFAULT_CONFIG.defaultImageModel;
   const ratio = options.ratio || DEFAULT_CONFIG.defaultRatio;
   const outputs = Math.min(4, Math.max(1, parseInt(options.outputs, 10) || 1));
@@ -25,7 +28,7 @@ ${chalk.bold('Prompt:')}   ${chalk.cyan(prompt)}
 ${chalk.bold('Model:')}    ${chalk.yellow(model)}
 ${chalk.bold('Ratio:')}    ${chalk.blue(ratio)}
 ${chalk.bold('Outputs:')}  ${chalk.blue(`x${outputs}`)}
-${chalk.bold('Output:')}   ${chalk.gray(outputDir)}
+${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${chalk.bold('Output:')}   ${chalk.gray(outputDir)}
 ${dryRun ? chalk.bold.yellow('[DRY RUN - Setup only, will not generate]') : ''}
 ${chalk.gray('----------------------------------------')}
 `);
@@ -41,6 +44,7 @@ ${chalk.gray('----------------------------------------')}
         model,
         ratio,
         outputs,
+        refs,
         dryRun,
         timeoutMs
       },

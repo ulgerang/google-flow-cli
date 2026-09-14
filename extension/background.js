@@ -157,6 +157,47 @@ function bytesToDataUrl(bytes, mimeType) {
   return `data:${mimeType || 'application/octet-stream'};base64,` + btoa(binary);
 }
 
+// Inject a local file into the page's file input through the DevTools protocol.
+function debuggerCommand(target, method, params) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand(target, method, params || {}, (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(result);
+      }
+    });
+  });
+}
+
+async function attachFileViaDebugger(tabId, filePath) {
+  const target = { tabId };
+  await new Promise((resolve, reject) => {
+    chrome.debugger.attach(target, '1.3', () => {
+      if (chrome.runtime.lastError) reject(new Error('debugger attach: ' + chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+
+  try {
+    const doc = await debuggerCommand(target, 'DOM.getDocument', { depth: 1 });
+    const node = await debuggerCommand(target, 'DOM.querySelector', {
+      nodeId: doc.root.nodeId,
+      selector: 'input[type="file"]'
+    });
+    if (!node || !node.nodeId) {
+      throw new Error('file input disappeared before the file could be set');
+    }
+    await debuggerCommand(target, 'DOM.setFileInputFiles', {
+      files: [filePath],
+      nodeId: node.nodeId
+    });
+  } finally {
+    // Detach right away; the change event processes independently.
+    chrome.debugger.detach(target, () => void chrome.runtime.lastError);
+  }
+}
+
 async function fetchMediaInBackground(payload) {
   const candidates = [];
   if (payload.src) candidates.push(payload.src);
@@ -212,6 +253,74 @@ async function handleBridgeMessage(msg) {
         })
       );
     }
+    return;
+  }
+
+  if (action === 'attach_ref_file') {
+    // Reference image upload: Flow only accepts files through its own picker
+    // (hidden <input type=file>). We drive that picker and inject the file via
+    // the Chrome DevTools protocol (chrome.debugger), which can set input files.
+    try {
+      const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
+      if (tabs.length === 0) throw new Error('No Google Flow tab is open');
+      const tab = tabs[0];
+
+      const sendToContent = (act, pl) =>
+        new Promise((resolve, reject) => {
+          chrome.tabs.sendMessage(tab.id, { action: act, payload: pl || {}, id }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message + ' — refresh the Flow page'));
+            } else if (response && response.success === false) {
+              reject(new Error(response.error || 'Content action failed'));
+            } else {
+              resolve(response ? response.result : null);
+            }
+          });
+        });
+
+      const picker = await sendToContent('open_upload_picker');
+      if (!picker || !picker.fileInput) {
+        throw new Error('Flow did not expose a file input for the upload picker');
+      }
+
+        await attachFileViaDebugger(tab.id, payload.filePath);
+
+        // Wait until Flow registers the upload (ingredient chip / progress starts)
+        const attached = await sendToContent('wait_ingredient_attached', { timeoutMs: 20000 });
+        // Close the asset picker dialog that Flow leaves open
+        await sendToContent('close_ingredient_panel').catch(() => null);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: true, result: attached }));
+        }
+    } catch (err) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: false, error: err.message }));
+      }
+    }
+    return;
+  }
+
+  if (action === 'reload_extension') {
+    // Dev convenience: reload this extension from the CLI. After the restart,
+    // startup logic below re-injects content scripts by reloading Flow tabs.
+    try {
+      await chrome.storage.local.set({ reloadTabsOnStartup: true });
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: 'JOB_RESULT',
+            id,
+            success: true,
+            result: { reloading: true }
+          })
+        );
+      }
+    } catch (err) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: false, error: err.message }));
+      }
+    }
+    setTimeout(() => chrome.runtime.reload(), 300);
     return;
   }
 
@@ -320,6 +429,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
   }
 
+  if (message.type === 'BG_ATTACH_REF') {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
+        if (tabs.length === 0) throw new Error('No Google Flow tab is open');
+        const tab = tabs[0];
+
+        const sendToContent = (act, pl) =>
+          new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tab.id, { action: act, payload: pl || {} }, (response) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message + ' — refresh the Flow page'));
+              } else if (response && response.success === false) {
+                reject(new Error(response.error || 'Content action failed'));
+              } else {
+                resolve(response ? response.result : null);
+              }
+            });
+          });
+
+        const picker = await sendToContent('open_upload_picker');
+        if (!picker || !picker.fileInput) {
+          throw new Error('Flow did not expose a file input for the upload picker');
+        }
+        await attachFileViaDebugger(tab.id, message.payload.filePath);
+        const attached = await sendToContent('wait_ingredient_attached', { timeoutMs: 20000 });
+        await sendToContent('close_ingredient_panel').catch(() => null);
+        sendResponse({ attached: attached && attached.attached });
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
+    })();
+    return true; // async sendResponse
+  }
+
   if (message.type === 'BG_FETCH_MEDIA') {
     fetchMediaInBackground(message.payload || {})
       .then((result) => sendResponse(result))
@@ -352,6 +496,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Start connection on launch
 connectToBridge();
+
+// After a bridge-triggered extension reload, refresh open Flow tabs so their
+// content scripts reconnect to the new extension instance.
+(async () => {
+  try {
+    const { reloadTabsOnStartup } = await chrome.storage.local.get(['reloadTabsOnStartup']);
+    if (reloadTabsOnStartup) {
+      await chrome.storage.local.remove(['reloadTabsOnStartup']);
+      const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
+      tabs.forEach((t) => chrome.tabs.reload(t.id));
+      log(`Reloaded ${tabs.length} Flow tab(s) after extension update`);
+    }
+  } catch (e) {
+    // storage may be unavailable very early; ignore
+  }
+})();
 
 // Backup wake-up: if the service worker still gets suspended (e.g. browser restart
 // with no open socket), chrome.alarms fires periodically and revives it. The 0.5 min

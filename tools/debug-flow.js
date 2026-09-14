@@ -9,7 +9,13 @@ const client = new BridgeClient({});
 try {
   const result = await client.execute(
     'debug_dom',
-    { options: { menus: process.argv.includes('--menus') } },
+    {
+      options: {
+        menus: process.argv.includes('--menus'),
+        promptBarHtml: process.argv.includes('--prompt-bar'),
+        tiles: true
+      }
+    },
     { timeoutMs: 15000 }
   );
   console.log(JSON.stringify(result, null, 2));

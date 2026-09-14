@@ -84,7 +84,7 @@
 
       case 'generate_image':
         runAsync(async () => {
-          const { prompt, model, ratio, outputs, dryRun, timeoutMs = 180000 } = payload;
+          const { prompt, model, ratio, outputs, refs = [], dryRun, timeoutMs = 180000 } = payload;
 
           // 1. Ensure project context
           await FlowActions.ensureProject();
@@ -99,10 +99,59 @@
           if (ratio) await FlowActions.selectRatio(ratio);
           if (outputs) await FlowActions.selectOutputs(outputs);
 
-          // 4. Fill prompt
+          // 4. Baseline BEFORE attaching references — the ingredient upload also
+          // creates a new project tile which must not be mistaken for output
+          const initialKeys = FlowActions.getMediaItems().map((i) => i.src);
+
+          // 5. Attach reference images (ingredients) through the background
+          // (Flow's picker needs files injected via the debugger protocol)
+          const attachedRefs = [];
+          for (const ref of refs) {
+            try {
+              const r = await new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage(
+                  { type: 'BG_ATTACH_REF', payload: { filePath: ref.path } },
+                  (resp) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else if (resp && resp.error) reject(new Error(resp.error));
+                    else resolve(resp);
+                  }
+                );
+              });
+              attachedRefs.push(ref.name || 'reference');
+            } catch (refErr) {
+              console.warn('[Flow-CLI] Reference attach failed:', ref.name, refErr.message);
+              attachedRefs.push({ name: ref.name, error: refErr.message });
+            }
+          }
+
+          // The uploaded ingredient's own tile renders asynchronously; wait until
+          // the media tile set is stable (two identical consecutive scans) and
+          // fold everything into the baseline so only real output counts as new.
+          if (refs.length) {
+            let lastKeys = null;
+            const t0 = Date.now();
+            while (Date.now() - t0 < 40000) {
+              await FlowActions.delay(2500);
+              const keys = FlowActions.getMediaItems().map((i) => i.src);
+              keys.forEach((k) => {
+                if (!initialKeys.includes(k)) initialKeys.push(k);
+              });
+              if (
+                lastKeys &&
+                keys.length === lastKeys.length &&
+                keys.every((k) => lastKeys.includes(k))
+              ) {
+                break;
+              }
+              lastKeys = keys;
+            }
+          }
+
+          // 6. Fill prompt
           await FlowActions.fillPrompt(prompt);
 
-          // 5. Dry run check
+          // 7. Dry run check
           if (dryRun) {
             const settings = await FlowActions.readGenerationSettings();
             return {
@@ -113,30 +162,49 @@
               model,
               ratio,
               outputs,
+              refs: attachedRefs,
               activeSettings: settings
             };
           }
 
-          // 6. Get baseline media keys before clicking generate
-          const initialKeys = FlowActions.getMediaItems().map((i) => i.src);
-
-          // 7. Trigger generation
+          // 8. Trigger generation
           await FlowActions.triggerGenerate();
 
-          // 8. Wait for new media to appear
-          const genResult = await FlowActions.waitForGeneration({
-            initialKeys,
-            timeoutMs,
-            onProgress: (progress) => {
-              chrome.runtime.sendMessage({
-                type: 'JOB_PROGRESS',
-                id,
-                progress
-              });
-            }
-          });
+          // 9. Wait for new media to appear. With references attached, prefer
+          // label-based detection: Flow titles output tiles after the prompt,
+          // while the uploaded reference tile keeps the file name (src-based
+          // detection alone mistakes the uploaded ingredient for the output).
+          let genResult;
+          if (refs.length) {
+            const genStart = Date.now();
+            genResult = await FlowActions.waitForPredicate(() => {
+              const found = FlowActions.findGeneratedTiles(prompt, initialKeys);
+              if (found.length > 0) {
+                return {
+                  success: true,
+                  items: found,
+                  allItems: FlowActions.getMediaItems(),
+                  elapsedMs: Date.now() - genStart
+                };
+              }
+              return false;
+            }, timeoutMs, 2500);
+            chrome.runtime.sendMessage({ type: 'JOB_PROGRESS', id, progress: { status: 'generating' } }).catch(() => {});
+          } else {
+            genResult = await FlowActions.waitForGeneration({
+              initialKeys,
+              timeoutMs,
+              onProgress: (progress) => {
+                chrome.runtime.sendMessage({
+                  type: 'JOB_PROGRESS',
+                  id,
+                  progress
+                });
+              }
+            });
+          }
 
-          // 9. Fetch media blobs as Base64 for CLI saving (small delay lets the
+          // 10. Fetch media blobs as Base64 for CLI saving (small delay lets the
           // freshly created tiles finish signing/serving their URLs)
           await FlowActions.delay(2000);
           const media = [];
@@ -166,6 +234,7 @@
             model,
             ratio,
             outputs,
+            refs: attachedRefs,
             elapsedMs: genResult.elapsedMs,
             media,
             mediaCount: media.length
@@ -175,7 +244,7 @@
 
       case 'generate_video':
         runAsync(async () => {
-          const { prompt, model, ratio, duration, outputs, confirm = false } = payload;
+          const { prompt, model, ratio, duration, outputs, refs = [], confirm = false } = payload;
 
           // 1. Ensure project
           await FlowActions.ensureProject();
@@ -191,7 +260,27 @@
           if (duration) await FlowActions.selectDuration(duration);
           if (outputs) await FlowActions.selectOutputs(outputs);
 
-          // 4. Fill prompt
+          // 4. Attach reference images through the background
+          const attachedRefs = [];
+          for (const ref of refs) {
+            try {
+              await new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage(
+                  { type: 'BG_ATTACH_REF', payload: { filePath: ref.path } },
+                  (resp) => {
+                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                    else if (resp && resp.error) reject(new Error(resp.error));
+                    else resolve(resp);
+                  }
+                );
+              });
+              attachedRefs.push(ref.name || 'reference');
+            } catch (refErr) {
+              attachedRefs.push({ name: ref.name, error: refErr.message });
+            }
+          }
+
+          // 5. Fill prompt
           await FlowActions.fillPrompt(prompt);
 
           // Video uses credits - require explicit confirmation
@@ -240,6 +329,138 @@
             mediaCount: items.length,
             items
           };
+        });
+        return true;
+
+      case 'add_ingredient':
+        runAsync(async () => {
+          const { dataUrl, name } = payload || {};
+          if (!dataUrl) throw new Error('add_ingredient requires payload.dataUrl');
+          return await FlowActions.addIngredientFromDataUrl(dataUrl, name);
+        });
+        return true;
+
+      case 'open_upload_picker':
+        runAsync(async () => {
+          // Reveal Flow's hidden file input with the fewest invasive clicks.
+          // Each stage stops early once an input[type=file] is mounted.
+          const findInput = () => document.querySelector('input[type="file"]');
+          let input = findInput();
+          if (input) return { fileInput: true, via: 'existing' };
+
+          const plusBtn = FlowActions.visibleButtons().find((b) =>
+            /소재 추가|ingredient|프롬프트 상자에/i.test(b.getAttribute('aria-label') || '')
+          );
+          if (plusBtn) {
+            plusBtn.click();
+            await FlowActions.delay(900);
+            input = findInput();
+            if (input) return { fileInput: true, via: 'after_menu' };
+          }
+
+          // Switch to the upload view (tab click usually just mounts the input)
+          const uploadTab = Array.from(
+            document.querySelectorAll('[role="tab"], mat-list-item')
+          ).find(
+            (el) =>
+              el.offsetParent !== null &&
+              /^(업로드|upload)$/i.test((el.textContent || '').trim())
+          );
+          if (uploadTab) {
+            uploadTab.click();
+            await FlowActions.delay(700);
+            input = findInput();
+            if (input) return { fileInput: true, via: 'after_upload_tab' };
+          }
+
+          // Last resort: the explicit upload button (may open a native dialog)
+          const uploadBtn = Array.from(document.querySelectorAll('button')).find(
+            (el) =>
+              el.offsetParent !== null &&
+              /(미디어 업로드|upload media|upload)/i.test(
+                (el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '')
+              )
+          );
+          if (uploadBtn) {
+            uploadBtn.click();
+            await FlowActions.delay(900);
+            input = findInput();
+            if (input) return { fileInput: true, via: 'after_upload_button' };
+          }
+
+          return { fileInput: false };
+        });
+        return true;
+
+      case 'wait_ingredient_attached':
+        runAsync(async () => {
+          // After the file is injected, Flow shows it pre-selected in the asset
+          // picker with an "프롬프트에 추가" (Add to prompt) button. Click it,
+          // wait for the picker to close, then look for the ingredient chip in
+          // the prompt box.
+          const timeoutMs = payload?.timeoutMs || 20000;
+          let clicked = false;
+          try {
+            const addBtn = await FlowActions.waitForPredicate(
+              () =>
+                FlowActions.visibleButtons().find((b) =>
+                  /프롬프트에 추가|add to prompt/i.test(
+                    (b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')
+                  )
+                ) || false,
+              Math.min(timeoutMs, 12000),
+              400
+            );
+            if (addBtn) {
+              addBtn.click();
+              clicked = true;
+              await FlowActions.delay(1500);
+            }
+          } catch (e) {
+            // No add button (some flows attach directly) — fall through
+          }
+
+          let chipVisible = false;
+          try {
+            await FlowActions.waitForPredicate(() => {
+              const box = document.querySelector('flow-base-prompt-box');
+              if (!box) return false;
+              const hit =
+                box.querySelectorAll('img, [style*="background-image"]').length > 0 ||
+                !!Array.from(box.querySelectorAll('button')).find((b) =>
+                  /삭제|remove|지우기/i.test(b.getAttribute('aria-label') || '')
+                );
+              return hit;
+            }, 8000, 400);
+            chipVisible = true;
+          } catch (e) {
+            // chip heuristics can miss; the picker close state decides below
+          }
+
+          const dialogGone = !document.querySelector('[role="dialog"]');
+          return { attached: clicked || chipVisible || dialogGone, clicked, chipVisible, dialogGone };
+        });
+        return true;
+
+      case 'close_ingredient_panel':
+        runAsync(async () => {
+          // Close the still-open asset picker dialog (닫기 / close buttons first,
+          // then an Escape keydown as fallback).
+          const closeBtn = Array.from(document.querySelectorAll('button')).find(
+            (b) =>
+              b.offsetParent !== null &&
+              /^(닫기|close)$/i.test((b.textContent || '').trim()) &&
+              b.closest('[role="dialog"], [class*="dialog"], [class*="panel"], [class*="popover"]')
+          );
+          if (closeBtn) {
+            closeBtn.click();
+            await FlowActions.delay(500);
+          }
+          if (document.querySelector('[role="dialog"]')) {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            await FlowActions.delay(400);
+          }
+          return { closed: !document.querySelector('[role="dialog"]') };
         });
         return true;
 

@@ -6,7 +6,8 @@
   "permissions": [
     "tabs",
     "storage",
-    "alarms"
+    "alarms",
+    "debugger"
   ],
   "host_permissions": [
     "*://labs.google/*",

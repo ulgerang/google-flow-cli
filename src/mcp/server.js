@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -70,6 +71,11 @@ export async function runMcpServer(options = {}) {
                 type: 'number',
                 description: 'Number of images per generation (1-4)',
                 default: 1
+              },
+              ref_images: {
+                type: 'array',
+                items: { type: 'string', description: 'Absolute path to a local reference image (png/jpg/webp/gif)' },
+                description: 'Reference images (ingredients) attached to the prompt for guidance'
               },
               output_dir: {
                 type: 'string',
@@ -224,11 +230,23 @@ export async function runMcpServer(options = {}) {
         const outputDir = path.resolve(args.output_dir || DEFAULT_CONFIG.outputDir);
         const dryRun = args.auto_confirm === false;
 
+        const MIME_BY_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
+        const refs = (args.ref_images || []).map((p) => {
+          const resolved = path.resolve(p);
+          const ext = path.extname(resolved).toLowerCase();
+          if (!MIME_BY_EXT[ext]) throw new Error(`Unsupported reference image type "${ext}": ${resolved}`);
+          return {
+            name: path.basename(resolved),
+            dataUrl: `data:${MIME_BY_EXT[ext]};base64,${fs.readFileSync(resolved).toString('base64')}`
+          };
+        });
+
         const result = await client.execute('generate_image', {
           prompt,
           model,
           ratio,
           outputs: Math.min(4, Math.max(1, parseInt(args.outputs, 10) || 1)),
+          refs,
           dryRun,
           timeoutMs: 180000
         });

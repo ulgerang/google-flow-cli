@@ -47,6 +47,7 @@ program
   .option('-r, --ratio <ratio>', 'Aspect ratio ("16:9", "9:16", "1:1", "4:3", "3:4")', '16:9')
   .option('-n, --outputs <count>', 'Number of outputs per generation (1-4)', '1')
   .option('-o, --output <dir>', 'Directory to save output files', './flow_output')
+  .option('--ref <path>', 'Reference image (ingredient) to attach; repeatable', (val, prev = []) => [...prev, val])
   .option('--dry-run', 'Setup prompt and model in Flow without clicking generate', false)
   .option('-t, --timeout <seconds>', 'Max generation wait time in seconds', '180')
   .action(async (prompt, cmdOptions) => {
@@ -63,6 +64,7 @@ program
   .option('-d, --duration <duration>', 'Video duration ("4s", "6s", "8s", "10s")', '4s')
   .option('-n, --outputs <count>', 'Number of outputs per generation (1-4)', '1')
   .option('-o, --output <dir>', 'Directory to save output files', './flow_output')
+  .option('--ref <path>', 'Reference image (ingredient) to attach; repeatable', (val, prev = []) => [...prev, val])
   .option('--confirm', 'Confirm generation (consumes video credits)', false)
   .action(async (prompt, cmdOptions) => {
     const opts = { ...program.opts(), ...cmdOptions };

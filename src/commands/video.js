@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { BridgeClient } from '../bridge/client.js';
+import { loadRefImage } from '../utils/ref-image.js';
 import { DEFAULT_CONFIG } from '../config/default-config.js';
 
 export async function handleVideo(prompt, options = {}) {
@@ -13,6 +14,7 @@ export async function handleVideo(prompt, options = {}) {
   const ratio = options.ratio || DEFAULT_CONFIG.defaultRatio;
   const duration = options.duration || DEFAULT_CONFIG.defaultDuration;
   const outputs = Math.min(4, Math.max(1, parseInt(options.outputs, 10) || 1));
+  const refs = (options.ref || []).map(loadRefImage);
   const confirm = options.confirm === true;
 
   console.log(`
@@ -23,7 +25,7 @@ ${chalk.bold('Model:')}     ${chalk.yellow(model)}
 ${chalk.bold('Ratio:')}     ${chalk.blue(ratio)}
 ${chalk.bold('Duration:')}  ${chalk.green(duration)}
 ${chalk.bold('Outputs:')}   ${chalk.blue(`x${outputs}`)}
-${confirm ? chalk.bold.red('⚠️ --confirm passed: Credits will be consumed!') : chalk.bold.yellow('ℹ Setup Mode (No credits consumed without --confirm)')}
+${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${confirm ? chalk.bold.red('⚠️ --confirm passed: Credits will be consumed!') : chalk.bold.yellow('ℹ Setup Mode (No credits consumed without --confirm)')}
 ${chalk.gray('----------------------------------------')}
 `);
 
@@ -39,6 +41,7 @@ ${chalk.gray('----------------------------------------')}
         ratio,
         duration,
         outputs,
+        refs,
         confirm
       },
       {

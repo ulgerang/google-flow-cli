@@ -188,7 +188,21 @@ flow media get <uuid-또는-src>
 flow image "A watercolor city" --outputs 4
 ```
 
-### 9. 상시 브리지 서버 실행 (`flow serve`)
+### 9. 레퍼런스 이미지 (소재/Ingredient) 🆕
+```bash
+# 로컬 이미지를 소재로 붙여 레퍼런스 기반 생성 (여러 개 반복 가능)
+flow image "Turn this character into a plush toy" --ref "D:\refs\character.png"
+
+# 동영상에도 소재 첨부 가능
+flow video "The character walks through fog" --ref "D:\refs\character.png" --confirm
+```
+- 소재는 Flow 프롬프트 창의 "＋ 소재 추가 → 미디어 업로드" 경로로 업로드되며,
+  확장 프로그램이 내부적으로 디버거 프로토콜(chrome.debugger)로 파일을 주입합니다.
+  업로드 중 브라우저 상단에 디버깅 안내 배너가 잠깐 표시될 수 있습니다(정상).
+- 이미지(png/jpg/webp/gif)를 지원합니다. 동일 파일을 반복 사용하면 프로젝트
+  자산에 여러 복사본이 쌓일 수 있습니다.
+
+### 10. 상시 브리지 서버 실행 (`flow serve`)
 백그라운드 또는 별도 터미널에서 상시 브리지 서버를 켜두고 여러 명령을 빠르게 수행할 수 있습니다:
 ```bash
 flow serve
