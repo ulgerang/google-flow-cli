@@ -1,0 +1,37 @@
+{
+  "name": "google-flow-cli",
+  "version": "1.0.0",
+  "description": "Chrome Extension and CLI for automating Google Flow image & video generation",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "flow": "./src/bin/flow.js",
+    "flow-cli": "./src/bin/flow.js"
+  },
+  "scripts": {
+    "start": "node src/bin/flow.js",
+    "serve": "node src/bin/flow.js serve",
+    "status": "node src/bin/flow.js status",
+    "mcp": "node src/bin/flow.js mcp",
+    "test": "node test/mock-test.js"
+  },
+  "keywords": [
+    "google-flow",
+    "chrome-extension",
+    "cli",
+    "mcp",
+    "ai-image-generation",
+    "veo",
+    "nano-banana",
+    "imagen"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "ora": "^8.2.0",
+    "ws": "^8.18.1"
+  }
+}

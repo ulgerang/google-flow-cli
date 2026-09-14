@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Google Flow CLI Bridge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="logo-title">
+      <div class="logo-icon">⚡</div>
+      <div class="title">Flow Bridge</div>
+    </div>
+    <span id="version" class="badge">v1.0.0</span>
+  </div>
+
+  <div class="card">
+    <div class="status-row">
+      <span class="label">Bridge Server:</span>
+      <span id="bridge-status" class="status-pill status-disconnected">Disconnected</span>
+    </div>
+    <div class="status-detail" id="bridge-url">ws://127.0.0.1:58231</div>
+  </div>
+
+  <div class="card">
+    <div class="status-row">
+      <span class="label">Google Flow Tab:</span>
+      <span id="tab-status" class="status-pill status-warning">Not Open</span>
+    </div>
+    <div class="status-detail" id="tab-detail">No active Flow tab detected</div>
+    <button id="btn-open-flow" class="btn btn-secondary">Open Google Flow</button>
+  </div>
+
+  <div class="card config-card">
+    <div class="config-row">
+      <label for="port-input">Bridge Port:</label>
+      <input type="number" id="port-input" value="58231" min="1024" max="65535">
+      <button id="btn-save-port" class="btn btn-small">Save</button>
+    </div>
+  </div>
+
+  <div class="card logs-card">
+    <div class="logs-header">
+      <span>Activity Logs</span>
+      <button id="btn-refresh" class="icon-btn" title="Refresh">🔄</button>
+    </div>
+    <div id="logs-container" class="logs-container">
+      <div class="log-empty">No recent activity</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>Ready for <code>flow-cli</code> commands</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

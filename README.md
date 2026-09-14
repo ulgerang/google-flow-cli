@@ -1,0 +1,218 @@
+# ⚡ Google Flow CLI & Chrome Extension Bridge
+
+[Google Flow (Flow Studio)](https://labs.google/fx/tools/flow)를 터미널 CLI 및 AI 에이전트(MCP)에서 손쉽게 제어할 수 있도록 해주는 크롬 익스텐션 & CLI 브리지 프로젝트입니다.
+
+---
+
+## 💡 왜 CDP(Playwright) 대신 크롬 익스텐션 방식인가요?
+
+기존의 [google-flow-browser-mcp](https://github.com/TMSSS05/google-flow-browser-mcp) 같은 방식은 Chrome을 디버깅 포트(`--remote-debugging-port=9222`)로 별도 실행해야 했습니다:
+- ❌ 기존에 열려 있는 크롬 브라우저를 모두 종료하거나 복잡한 프로필 경로를 수동 지정해야 함
+- ❌ 자동화 봇 감지나 구글 로그인 세션 풀림, CAPTCHA 문제 발생 가능성
+- ❌ 세션 쿠키 추출 및 파일 다운로드 시 인증 문제
+
+### ✨ 크롬 익스텐션 + CLI 브리지 방식의 장점:
+- ✅ **간편한 설치**: 평소 쓰던 크롬 브라우저에 익스텐션을 한 번만 설치하면 끝!
+- ✅ **자연스러운 로그인**: 브라우저에 이미 로그인되어 있는 내 구글 계정 세션을 그대로 활용
+- ✅ **원터치 CLI**: 터미널에서 `flow image "prompt"` 한 줄이면 이미지 생성 및 로컬 저장까지 완료
+- ✅ **MCP 완벽 지원**: OpenCode, Claude Desktop, Antigravity, Cursor 등 모든 AI 코딩 에이전트와 완벽 연동 (`flow mcp`)
+
+---
+
+## 🏗️ 시스템 구조 (Architecture)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Google Chrome Browser                    │
+│                                                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │ Google Flow Tab (https://labs.google/fx/tools/flow) │   │
+│   │ [content.js & flow-actions.js]                      │   │
+│   │  • DOM 자동 제어 (모델/비율/프롬프트/생성)            │   │
+│   │  • 실시간 진행률 & 생성 완료 이미지 감지            │   │
+│   │  • 내장 인증 세션으로 고화질 원본 Blob 추출         │   │
+│   └──────────────────────────▲──────────────────────────┘   │
+│                              │ chrome.tabs.sendMessage     │
+│   ┌──────────────────────────▼──────────────────────────┐   │
+│   │ Extension Background Service Worker (background.js) │   │
+│   │  • 탭 관리 및 팝업 상태 제공                        │   │
+│   │  • 로컬 브리지와 WebSocket 자동 재연결 유지          │   │
+│   └──────────────────────────▲──────────────────────────┘   │
+└──────────────────────────────┼──────────────────────────────┘
+                               │ WebSocket (ws://127.0.0.1:58231)
+                               │
+┌──────────────────────────────▼──────────────────────────────┐
+│                  Google Flow CLI & Bridge                   │
+│                                                             │
+│  • CLI Tools   : flow image, flow video, flow status ...    │
+│  • Bridge Core : WebSocket & HTTP Server                    │
+│  • MCP Server  : stdio JSON-RPC (OpenCode / Claude / etc.)  │
+│  • File Saver  : 이미지 자동 다운로드 및 메타데이터 JSON 저장│
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚀 빠른 시작 가이드 (Quick Start)
+
+### 1️⃣ 크롬 익스텐션 설치
+1. 크롬 브라우저를 열고 주소창에 `chrome://extensions` 입력
+2. 우측 상단의 **개발자 모드(Developer mode)** 토글 켜기
+3. 좌측 상단의 **[압축해제된 확장 프로그램을 로드합니다]** (Load unpacked) 버튼 클릭
+4. 이 프로젝트의 `extension` 폴더(`d:\git\video-git\google-flow-cli\extension`) 선택
+5. 크롬 툴바에 **Google Flow CLI Bridge** 익스텐션 아이콘(⚡)이 등록됩니다!
+
+### 2️⃣ CLI 도구 설치
+프로젝트 폴더에서 npm 글로벌 등록을 실행합니다:
+```bash
+cd google-flow-cli
+npm install
+npm install -g .
+```
+이제 터미널 어디서나 `flow` 또는 `flow-cli` 명령어를 바로 사용할 수 있습니다!
+
+---
+
+## 💻 CLI 명령어 사용법 (Usage)
+
+### 1. 연결 및 탭 상태 확인 (`flow status`)
+```bash
+flow status
+```
+- 브리지 서버 실행 여부, 크롬 익스텐션 연결 상태, 열려 있는 Google Flow 탭 및 활성 모델 정보를 확인합니다.
+
+### 2. 구글 플로우 탭 열기 (`flow open`)
+```bash
+flow open
+```
+- 크롬 브라우저에서 Google Flow(`https://labs.google/fx/tools/flow`) 탭을 즉시 열거나 포커스합니다.
+
+### 3. AI 이미지 생성 (`flow image`)
+```bash
+# 기본 모델(Nano Banana 2), 16:9 비율로 생성
+flow image "A majestic cybernetic tiger walking in neon rainforest"
+
+# 모델, 비율, 저장 디렉토리 지정
+flow image "Retro anime style girl studying at cozy cafe with rain outside" \
+  --model "Nano Banana 2" \
+  --ratio "9:16" \
+  --output "./my_wallpapers"
+
+# 생성하지 않고 프롬프트 및 설정만 준비 (Dry-run)
+flow image "A futuristic city" --dry-run
+```
+
+#### 🎨 지원 이미지 모델 (`--model`):
+- `Nano Banana 2` (기본값, 추천)
+- `Nano Banana Pro`
+- `Imagen 4`
+
+#### 📐 지원 비율 (`--ratio`):
+- `16:9` (가로형 와이드)
+- `9:16` (세로형 쇼츠/릴스)
+- `1:1` (정사각형)
+- `4:3` / `3:4`
+
+### 4. 비디오 생성 (`flow video`)
+> ⚠️ **안내**: 비디오 생성은 구글 플로우 유료 크레딧이 소모될 수 있습니다. 안전을 위해 `--confirm` 옵션을 주어야만 최종 생성 버튼이 클릭됩니다.
+
+```bash
+# 비디오 설정 준비 (크레딧 소모 없음)
+flow video "Hyperrealistic drone flythrough inside a crystalline cave" \
+  --model "Veo 3.1 - Fast" \
+  --duration "4s"
+
+# 확인 후 실제 생성 실행
+flow video "Hyperrealistic drone flythrough inside a crystalline cave" \
+  --model "Veo 3.1 - Fast" \
+  --duration "4s" \
+  --confirm
+```
+
+### 5. 프로젝트 관리 (`flow projects`)
+```bash
+# 구글 플로우 프로젝트 목록 조회
+flow projects list
+
+# 새 프로젝트 생성
+flow projects new "My Commercial Project"
+```
+
+### 6. 상시 브리지 서버 실행 (`flow serve`)
+백그라운드 또는 별도 터미널에서 상시 브리지 서버를 켜두고 여러 명령을 빠르게 수행할 수 있습니다:
+```bash
+flow serve
+```
+
+---
+
+## 🤖 AI 에이전트 & MCP 연동 (Model Context Protocol)
+
+OpenCode, Claude Desktop, Antigravity, Cursor 등에서 Google Flow를 도구(Tool)로 사용할 수 있도록 MCP 서버(`flow mcp`)를 내장하고 있습니다.
+
+### 📁 Claude Desktop 연동 설정
+`%APPDATA%\Claude\claude_desktop_config.json`에 다음 설정을 추가합니다:
+
+```json
+{
+  "mcpServers": {
+    "google-flow": {
+      "command": "node",
+      "args": [
+        "D:\\git\\video-git\\google-flow-cli\\src\\bin\\flow.js",
+        "mcp"
+      ]
+    }
+  }
+}
+```
+
+### 📁 OpenCode 연동 설정
+OpenCode 구성 파일에 등록:
+
+```json
+{
+  "mcpServers": {
+    "google-flow": {
+      "command": "node",
+      "args": [
+        "D:\\git\\video-git\\google-flow-cli\\src\\bin\\flow.js",
+        "mcp"
+      ]
+    }
+  }
+}
+```
+
+#### 🛠️ 제공되는 MCP Tools:
+- `flow_status`: 브리지 및 크롬 Flow 탭 연결 상태 확인
+- `flow_open`: 구글 플로우 탭 열기
+- `flow_generate_image`: 프롬프트, 모델, 비율로 이미지 생성 및 로컬 저장
+- `flow_generate_video`: 비디오 생성 설정 및 렌더링 요청
+- `flow_list_projects`: 프로젝트 목록 조회
+- `flow_create_project`: 새 프로젝트 생성
+
+---
+
+## 📂 저장 결과물 구조
+생성된 이미지는 기본적으로 `./flow_output/` 디렉토리에 저장됩니다:
+```
+flow_output/
+├── flow_image_2026-09-14T13-33-18_a1b2c3.png       # 고화질 원본 이미지
+└── flow_image_2026-09-14T13-33-18_a1b2c3.meta.json # 프롬프트, 모델, 비율, 생성일시 메타데이터
+```
+
+---
+
+## 🔧 문제 해결 (Troubleshooting)
+
+| 현상 | 해결 방법 |
+|---|---|
+| **Chrome Extension이 연결되지 않음** | 1. 크롬에서 `chrome://extensions` 접속 후 익스텐션 새로고침(🔄)<br>2. 익스텐션 팝업을 열어 브리지 포트(`58231`)가 일치하는지 확인 |
+| **Flow 탭을 찾을 수 없음** | 크롬 브라우저에서 `https://labs.google/fx/tools/flow` 페이지를 열고 로그인되어 있는지 확인하세요. |
+| **모델 또는 프롬프트 입력창을 찾지 못함** | Flow 웹페이지가 프로젝트 내부(`https://labs.google/fx/tools/flow/project/...`)인지 확인하고 페이지 새로고침(F5)을 해주세요. |
+
+---
+
+## 📄 라이선스
+MIT License
