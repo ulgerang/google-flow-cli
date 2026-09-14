@@ -1211,7 +1211,18 @@ const FlowActions = {
    * List the assets shown in the ingredient picker (uploads + generations)
    */
   async listAssets() {
-    await this.openAddMenu();
+    try {
+      await this.openAddMenu();
+    } catch (err) {
+      // Frame mode replaces the + menu with frame slots — the start slot opens
+      // the same asset picker.
+      const chips = this.frameSlotButtons();
+      const startChip =
+        chips.find((b) => /시작|start/i.test(b.textContent) || b.querySelector('img')) || chips[0];
+      if (!startChip) throw err;
+      startChip.click();
+      await this.delay(1100);
+    }
     const options = Array.from(document.querySelectorAll('[role="option"]')).filter(
       (o) => o.offsetParent !== null
     );
@@ -1372,11 +1383,27 @@ const FlowActions = {
     await this.delay(1100);
 
     if (assetQuery) {
+      // The picker lazy-loads asset rows; wait for them before matching
+      try {
+        await this.waitForPredicate(
+          () => document.querySelectorAll('[role="option"]').length > 0,
+          8000,
+          300
+        );
+      } catch (err) {
+        /* upload-only projects have no rows */
+      }
       const q = String(assetQuery).toLowerCase();
-      const options = Array.from(document.querySelectorAll('[role="option"]')).filter((o) => o.offsetParent !== null);
-      const target = /^\d+$/.test(String(assetQuery).trim())
-        ? options[parseInt(assetQuery, 10) - 1]
-        : options.find((o) => (o.textContent || '').toLowerCase().includes(q));
+      let target = null;
+      for (let attempt = 0; attempt < 3 && !target; attempt++) {
+        const options = Array.from(document.querySelectorAll('[role="option"]')).filter(
+          (o) => o.offsetParent !== null
+        );
+        target = /^\d+$/.test(String(assetQuery).trim())
+          ? options[parseInt(assetQuery, 10) - 1]
+          : options.find((o) => (o.textContent || '').toLowerCase().includes(q));
+        if (!target) await this.delay(1200);
+      }
       if (!target) {
         await this.closeOverlays();
         throw new Error(`프레임 자산을 찾을 수 없습니다: ${assetQuery}`);
