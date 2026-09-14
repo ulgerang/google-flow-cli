@@ -4,10 +4,32 @@
  */
 
 const DEFAULT_PORT = 58231;
+// Google Flow moved from labs.google/fx to flow.google.com (labs.google redirects there).
+const FLOW_TAB_PATTERNS = ['*://labs.google/fx/*', '*://flow.google.com/*'];
+const FLOW_HOME_URL = 'https://flow.google.com/';
 let socket = null;
 let reconnectTimer = null;
 let isConnecting = false;
+let pingTimer = null;
 const logs = [];
+
+// Chrome suspends MV3 service workers after ~30s without events. Since Chrome 116,
+// WebSocket activity resets that idle timer, so we ping the bridge periodically.
+function startPingLoop() {
+  if (pingTimer) clearInterval(pingTimer);
+  pingTimer = setInterval(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'PING', time: new Date().toISOString() }));
+    }
+  }, 20000);
+}
+
+function stopPingLoop() {
+  if (pingTimer) {
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+}
 
 function log(message, meta = null) {
   const entry = {
@@ -42,6 +64,7 @@ async function connectToBridge() {
     socket.onopen = () => {
       isConnecting = false;
       log(`Connected to CLI bridge on ${wsUrl}`);
+      startPingLoop();
       // Announce presence
       socket.send(
         JSON.stringify({
@@ -68,6 +91,7 @@ async function connectToBridge() {
     socket.onclose = () => {
       isConnecting = false;
       socket = null;
+      stopPingLoop();
       scheduleReconnect();
     };
   } catch (err) {
@@ -85,7 +109,7 @@ function scheduleReconnect() {
 
 // Ensure Flow tab is available
 async function getOrOpenFlowTab(openIfNeeded = true) {
-  const tabs = await chrome.tabs.query({ url: '*://labs.google/fx/*' });
+  const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
   if (tabs.length > 0) {
     // Focus the first matching tab
     const tab = tabs[0];
@@ -97,7 +121,7 @@ async function getOrOpenFlowTab(openIfNeeded = true) {
 
   log('No Google Flow tab open. Opening new tab...');
   const newTab = await chrome.tabs.create({
-    url: 'https://labs.google/fx/tools/flow',
+    url: FLOW_HOME_URL,
     active: true
   });
 
@@ -121,13 +145,64 @@ async function getOrOpenFlowTab(openIfNeeded = true) {
   return newTab;
 }
 
+// Media CDN URLs (flow-content.google) are cross-origin to the Flow page, so
+// the content script cannot fetch them (CORS). The service worker can, thanks
+// to host_permissions.
+function bytesToDataUrl(bytes, mimeType) {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return `data:${mimeType || 'application/octet-stream'};base64,` + btoa(binary);
+}
+
+async function fetchMediaInBackground(payload) {
+  const candidates = [];
+  if (payload.src) candidates.push(payload.src);
+  if (payload.uuid) {
+    candidates.push(`https://flow-content.google/image/${payload.uuid}`);
+    candidates.push(`https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=${payload.uuid}`);
+  }
+
+  let lastError = null;
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, { credentials: 'include' });
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status}`);
+        continue;
+      }
+      const blob = await response.blob();
+      if (!blob.size || !/^(image|video)\//.test(blob.type)) {
+        lastError = new Error(`Unexpected content-type ${blob.type}`);
+        continue;
+      }
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      return {
+        src: payload.src || null,
+        uuid: payload.uuid || null,
+        dataUrl: bytesToDataUrl(bytes, blob.type),
+        mimeType: blob.type,
+        size: blob.size,
+        via: 'background'
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw new Error(
+    `Background media fetch failed for ${payload.uuid || (payload.src || '').slice(0, 60)}: ${lastError?.message || 'unknown'}`
+  );
+}
+
 // Handle incoming RPC message from CLI bridge
 async function handleBridgeMessage(msg) {
   const { id, action, payload } = msg;
 
   if (action === 'ping') {
     if (socket && socket.readyState === WebSocket.OPEN) {
-      const tabs = await chrome.tabs.query({ url: '*://labs.google/fx/*' });
+      const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
       socket.send(
         JSON.stringify({
           type: 'PONG',
@@ -138,6 +213,31 @@ async function handleBridgeMessage(msg) {
       );
     }
     return;
+  }
+
+  if (action === 'fetch_media') {
+    const srcHost = (() => {
+      try {
+        return payload?.src ? new URL(payload.src).hostname : null;
+      } catch {
+        return null;
+      }
+    })();
+    // Content script can only fetch same-origin media; route the rest here.
+    if ((srcHost && srcHost !== 'flow.google.com' && srcHost !== 'labs.google') || (!srcHost && payload?.uuid && !payload?.src)) {
+      try {
+        const result = await fetchMediaInBackground(payload || {});
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: true, result }));
+        }
+      } catch (err) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: false, error: err.message }));
+        }
+      }
+      return;
+    }
+    // fall through to content script for same-origin media
   }
 
   if (action === 'open_flow') {
@@ -209,7 +309,7 @@ async function handleBridgeMessage(msg) {
 }
 
 // Forward content script events (e.g. progress) to CLI bridge
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'JOB_PROGRESS' && socket && socket.readyState === WebSocket.OPEN) {
     socket.send(
       JSON.stringify({
@@ -220,6 +320,13 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     );
   }
 
+  if (message.type === 'BG_FETCH_MEDIA') {
+    fetchMediaInBackground(message.payload || {})
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true; // async sendResponse
+  }
+
   if (message.type === 'FLOW_TAB_READY') {
     log('Flow tab reported ready', message.url);
   }
@@ -227,7 +334,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   // Internal popup query
   if (message.type === 'GET_POPUP_STATE') {
     (async () => {
-      const tabs = await chrome.tabs.query({ url: '*://labs.google/fx/*' });
+      const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
       const port = await getBridgePort();
       chrome.runtime.sendMessage({
         type: 'POPUP_STATE',
@@ -245,6 +352,31 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
 // Start connection on launch
 connectToBridge();
+
+// Backup wake-up: if the service worker still gets suspended (e.g. browser restart
+// with no open socket), chrome.alarms fires periodically and revives it. The 0.5 min
+// minimum period is supported since Chrome 120.
+chrome.alarms.create('flow-bridge-keepalive', { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'flow-bridge-keepalive') {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      connectToBridge();
+    } else {
+      socket.send(JSON.stringify({ type: 'PING', time: new Date().toISOString() }));
+    }
+  }
+});
+
+// Top-level tab listeners wake the suspended service worker on user browsing
+// activity so the bridge reconnects without requiring a popup click.
+chrome.tabs.onCreated.addListener(() => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) connectToBridge();
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'complete' && (!socket || socket.readyState !== WebSocket.OPEN)) {
+    connectToBridge();
+  }
+});
 
 // Keep service worker alive periodically
 setInterval(() => {

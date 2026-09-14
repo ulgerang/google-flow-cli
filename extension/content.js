@@ -56,26 +56,22 @@
       case 'get_status':
         runAsync(async () => {
           const inProject = window.location.href.includes('/project/');
-          const buttons = Array.from(document.querySelectorAll('button'));
-          const modelBtn = buttons.find((b) => {
-            const t = b.textContent || '';
-            return (
-              (t.includes('Nano') ||
-                t.includes('Banana') ||
-                t.includes('Imagen') ||
-                t.includes('Veo') ||
-                t.includes('Omni')) &&
-              b.offsetParent !== null
-            );
-          });
+          const settings = FlowActions.readGenerationSettings
+            ? await FlowActions.readGenerationSettings()
+            : null;
 
           return {
             url: window.location.href,
             title: document.title,
             inProject,
-            activeModel: modelBtn ? modelBtn.textContent.trim().replace(/\s+/g, ' ') : 'Unknown',
-            promptInputAvailable: !!document.querySelector('[contenteditable="true"], textarea'),
-            mediaCount: FlowActions.getMediaUuids().length
+            activeModel: settings?.model || 'Unknown',
+            aspectRatio: settings?.ratio || null,
+            outputs: settings?.outputs || null,
+            mode: settings?.mode || null,
+            promptInputAvailable: !!document.querySelector(
+              'div.ProseMirror[contenteditable="true"], [contenteditable="true"], textarea'
+            ),
+            mediaCount: FlowActions.getMediaItems().length
           };
         });
         return true;
@@ -88,50 +84,48 @@
 
       case 'generate_image':
         runAsync(async () => {
-          const { prompt, model, ratio, dryRun, timeoutMs = 180000 } = payload;
+          const { prompt, model, ratio, outputs, dryRun, timeoutMs = 180000 } = payload;
 
           // 1. Ensure project context
           await FlowActions.ensureProject();
           await FlowActions.delay(1000);
 
-          // 2. Switch to Image mode
+          // 2. Image mode (model family follows the mode radio in the settings panel)
           await FlowActions.switchMode('IMAGE');
           await FlowActions.delay(500);
 
-          // 3. Select model if requested
-          if (model) {
-            await FlowActions.selectModel(model);
-          }
+          // 3. Model / ratio / outputs via the settings panel
+          if (model) await FlowActions.selectModel(model);
+          if (ratio) await FlowActions.selectRatio(ratio);
+          if (outputs) await FlowActions.selectOutputs(outputs);
 
-          // 4. Select aspect ratio if requested
-          if (ratio) {
-            await FlowActions.selectRatio(ratio);
-          }
-
-          // 5. Fill prompt
+          // 4. Fill prompt
           await FlowActions.fillPrompt(prompt);
 
-          // 6. Dry run check
+          // 5. Dry run check
           if (dryRun) {
+            const settings = await FlowActions.readGenerationSettings();
             return {
               dryRun: true,
               status: 'ready_for_confirmation',
-              message: 'Prompt, model, and ratio prepared. Ready to generate.',
+              message: 'Prompt, model, and settings prepared. Ready to generate.',
               prompt,
               model,
-              ratio
+              ratio,
+              outputs,
+              activeSettings: settings
             };
           }
 
-          // 7. Get baseline image UUIDs before clicking generate
-          const initialUuids = FlowActions.getMediaUuids();
+          // 6. Get baseline media keys before clicking generate
+          const initialKeys = FlowActions.getMediaItems().map((i) => i.src);
 
-          // 8. Trigger generation
+          // 7. Trigger generation
           await FlowActions.triggerGenerate();
 
-          // 9. Wait for new images to appear
+          // 8. Wait for new media to appear
           const genResult = await FlowActions.waitForGeneration({
-            initialUuids,
+            initialKeys,
             timeoutMs,
             onProgress: (progress) => {
               chrome.runtime.sendMessage({
@@ -142,18 +136,27 @@
             }
           });
 
-          // 10. Fetch media blobs as Base64 for CLI saving
+          // 9. Fetch media blobs as Base64 for CLI saving (small delay lets the
+          // freshly created tiles finish signing/serving their URLs)
+          await FlowActions.delay(2000);
           const media = [];
-          for (const uuid of genResult.uuids) {
-            try {
-              const fileData = await FlowActions.fetchMediaDataUrl(uuid);
-              media.push(fileData);
-            } catch (fetchErr) {
-              console.warn('[Flow-CLI] Could not fetch media DataURL for UUID:', uuid, fetchErr);
-              media.push({
-                uuid,
-                url: `https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=${uuid}`
-              });
+          for (const item of genResult.items) {
+            let fetched = null;
+            for (let attempt = 0; attempt < 3 && !fetched; attempt++) {
+              try {
+                fetched = await FlowActions.fetchMediaDataUrl(item);
+              } catch (fetchErr) {
+                console.warn('[Flow-CLI] Media fetch attempt failed:', fetchErr.message);
+                // Re-read the tile: the signed URL may have been refreshed.
+                const fresh = FlowActions.getMediaItems().find((i) => i.uuid === item.uuid || i.src === item.src);
+                if (fresh && fresh.src !== item.src) item.src = fresh.src;
+                await FlowActions.delay(2500);
+              }
+            }
+            if (fetched) {
+              media.push(fetched);
+            } else {
+              media.push({ src: item.src, uuid: item.uuid });
             }
           }
 
@@ -162,6 +165,7 @@
             prompt,
             model,
             ratio,
+            outputs,
             elapsedMs: genResult.elapsedMs,
             media,
             mediaCount: media.length
@@ -171,36 +175,41 @@
 
       case 'generate_video':
         runAsync(async () => {
-          const { prompt, model, ratio, duration, confirm = false } = payload;
+          const { prompt, model, ratio, duration, outputs, confirm = false } = payload;
 
           // 1. Ensure project
           await FlowActions.ensureProject();
           await FlowActions.delay(1000);
 
-          // 2. Switch to Video mode
+          // 2. Video mode (switches the settings panel to video model families)
           await FlowActions.switchMode('VIDEO');
           await FlowActions.delay(500);
 
-          // 3. Model & ratio & duration
+          // 3. Model & ratio & duration & outputs
           if (model) await FlowActions.selectModel(model);
           if (ratio) await FlowActions.selectRatio(ratio);
           if (duration) await FlowActions.selectDuration(duration);
+          if (outputs) await FlowActions.selectOutputs(outputs);
 
           // 4. Fill prompt
           await FlowActions.fillPrompt(prompt);
 
           // Video uses credits - require explicit confirmation
           if (!confirm) {
+            const settings = await FlowActions.readGenerationSettings();
             return {
               status: 'ready_for_confirmation',
               message: 'Video prompt and settings prepared. Pass --confirm to execute generation.',
               prompt,
               model,
               ratio,
-              duration
+              duration,
+              outputs,
+              activeSettings: settings
             };
           }
 
+          const initialKeys = FlowActions.getMediaItems().map((i) => i.src);
           await FlowActions.triggerGenerate();
 
           return {
@@ -209,14 +218,55 @@
             prompt,
             model,
             ratio,
-            duration
+            duration,
+            outputs,
+            initialMediaCount: initialKeys.length
           };
+        });
+        return true;
+
+      case 'list_characters':
+        runAsync(async () => {
+          return await FlowActions.listCharactersFromPage();
+        });
+        return true;
+
+      case 'list_media':
+        runAsync(async () => {
+          const items = FlowActions.getMediaItems();
+          return {
+            inProject: window.location.href.includes('/project/'),
+            url: window.location.href,
+            mediaCount: items.length,
+            items
+          };
+        });
+        return true;
+
+      case 'fetch_media':
+        runAsync(async () => {
+          const { src, uuid } = payload || {};
+          if (!src && !uuid) throw new Error('fetch_media requires payload.src or payload.uuid');
+          return await FlowActions.fetchMediaDataUrl({ src, uuid });
         });
         return true;
 
       case 'list_projects':
         runAsync(async () => {
-          return FlowActions.listProjectsFromPage();
+          const projects = FlowActions.listProjectsFromPage();
+          if (projects.length === 0 && window.location.href.includes('/project/')) {
+            return {
+              homeRequired: true,
+              message: 'The open tab is inside a project. Open the Flow homepage (https://flow.google.com/) to scan all projects.'
+            };
+          }
+          return projects;
+        });
+        return true;
+
+      case 'debug_dom':
+        runAsync(async () => {
+          return FlowActions.inspectDom(payload?.options || {});
         });
         return true;
 

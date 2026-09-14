@@ -111,6 +111,16 @@ export class BridgeServer {
   handleMessage(msg, ws) {
     const { type, id } = msg;
 
+    // 0. Keep-alive ping from extension (resets MV3 service worker idle timer)
+    if (type === 'PING') {
+      this.extensionSocket = ws;
+      this.extensionMeta = { ...(this.extensionMeta || {}), lastSeenAt: msg.time || null };
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'PING_ACK', time: new Date().toISOString() }));
+      }
+      return;
+    }
+
     // 1. Extension handshake
     if (type === 'EXTENSION_HELLO') {
       this.extensionSocket = ws;

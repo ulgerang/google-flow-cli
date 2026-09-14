@@ -66,6 +66,11 @@ export async function runMcpServer(options = {}) {
                 description: 'Aspect ratio: "16:9", "9:16", "1:1", "4:3", "3:4"',
                 default: '16:9'
               },
+              outputs: {
+                type: 'number',
+                description: 'Number of images per generation (1-4)',
+                default: 1
+              },
               output_dir: {
                 type: 'string',
                 description: 'Directory path to save generated images',
@@ -121,6 +126,36 @@ export async function runMcpServer(options = {}) {
             type: 'object',
             properties: {},
             required: []
+          }
+        },
+        {
+          name: 'flow_list_characters',
+          description: 'List characters defined in the open Flow project (reference them in prompts with @tag)',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        },
+        {
+          name: 'flow_list_media',
+          description: 'List media UUIDs visible in the open Flow project',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        },
+        {
+          name: 'flow_get_media',
+          description: 'Download a media item by UUID and save it to disk',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              uuid: { type: 'string', description: 'Media UUID (from flow_list_media)' },
+              output_dir: { type: 'string', description: 'Directory to save the file', default: './flow_output' }
+            },
+            required: ['uuid']
           }
         },
         {
@@ -193,6 +228,7 @@ export async function runMcpServer(options = {}) {
           prompt,
           model,
           ratio,
+          outputs: Math.min(4, Math.max(1, parseInt(args.outputs, 10) || 1)),
           dryRun,
           timeoutMs: 180000
         });
@@ -276,6 +312,44 @@ export async function runMcpServer(options = {}) {
               text: JSON.stringify(projects, null, 2)
             }
           ]
+        };
+      }
+
+      if (name === 'flow_list_characters') {
+        const result = await client.execute('list_characters', {}, { timeoutMs: 20000 });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+        };
+      }
+
+      if (name === 'flow_list_media') {
+        const result = await client.execute('list_media', {}, { timeoutMs: 15000 });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+        };
+      }
+
+      if (name === 'flow_get_media') {
+        const src = args.src || null;
+        const uuid = args.uuid || null;
+        if (!src && !uuid) {
+          return { content: [{ type: 'text', text: 'Provide either src (opaque tile URL) or uuid' }] };
+        }
+        const media = await client.execute('fetch_media', { src, uuid }, { timeoutMs: 60000 });
+        const outputDir = path.resolve(args.output_dir || DEFAULT_CONFIG.outputDir);
+        if (!media.dataUrl) {
+          return {
+            content: [{ type: 'text', text: `Could not fetch data for ${uuid || (src || '').slice(0, 60)}` }]
+          };
+        }
+        const saved = await saveMediaItem({
+          outputDir,
+          type: (media.mimeType || '').startsWith('video/') ? 'video' : 'image',
+          data: media.dataUrl,
+          metadata: { src, uuid, mimeType: media.mimeType, source: 'google-flow-mcp' }
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ saved: saved.filePath, size: saved.size, uuid }, null, 2) }]
         };
       }
 

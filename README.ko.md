@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 [![MCP Ready](https://img.shields.io/badge/MCP-Server%20Ready-8A2BE2.svg)](src/mcp/server.js)
@@ -157,18 +157,59 @@ flow video "Hyperrealistic drone flythrough inside a crystalline cave" \
 
 ### 5. 프로젝트 관리 (`flow projects`)
 ```bash
-# 구글 플로우 프로젝트 목록 조회
+# 구글 플로우 프로젝트 목록 조회 (Flow 홈 화면 탭에서 실행 필요)
 flow projects list
 
 # 새 프로젝트 생성
 flow projects new "My Commercial Project"
 ```
 
-### 6. 상시 브리지 서버 실행 (`flow serve`)
+### 6. 캐릭터 조회 (`flow characters`) 🆕
+```bash
+# 현재 열린 프로젝트의 캐릭터 목록 조회 (프롬프트에서 @태그로 참조 가능)
+flow characters
+```
+
+### 7. 미디어 관리 (`flow media`) 🆕
+```bash
+# 현재 프로젝트에서 보이는 미디어 목록
+flow media list
+
+# 최근 생성 미디어 다운로드 (기본 1개, 원본 해상도)
+flow media latest 2
+
+# 특정 미디어 다운로드
+flow media get <uuid-또는-src>
+```
+
+### 8. 출력 수 설정 (`--outputs`) 🆕
+```bash
+# 한 번의 생성으로 2~4개의 이미지를 뽑기 (Flow 설정의 x1~x4)
+flow image "A watercolor city" --outputs 4
+```
+
+### 9. 상시 브리지 서버 실행 (`flow serve`)
 백그라운드 또는 별도 터미널에서 상시 브리지 서버를 켜두고 여러 명령을 빠르게 수행할 수 있습니다:
 ```bash
 flow serve
 ```
+
+---
+
+## 🆕 v1.1.0 주요 변경사항 (2026-09)
+- **flow.google.com 도메인 대응**: Google Flow가 `labs.google/fx/tools/flow` → `flow.google.com`으로
+  이전됨에 따라 익스텐션·CLI 전반을 새 UI에 맞게 재작성했습니다. (구 URL도 계속 지원)
+- **MV3 서비스 워커 keep-alive**: WebSocket ping(20초) + `chrome.alarms` 폴백 + 탭 이벤트
+  재연결로 브리지 연결이 끊기던 문제를 수정했습니다.
+- **새 설정 패널 자동화**: 모델 제품군 드롭다운, 이미지/동영상 모드 라디오, 비율,
+  출력 수(x1~x4)를 한국어/영어 UI 모두에서 제어합니다.
+- **새 미디어 URL 체계 지원**: `/asb/...=s512` 타일과 `flow-content.google` 서명 CDN URL을
+  모두 처리하며, 후자는 백그라운드 서비스 워커가 대신 다운로드합니다(CORS 우회).
+  `=s0` 접미사로 원본 해상도를 저장합니다.
+- **신규 명령어**: `flow characters`, `flow media [list|latest|get]`, `--outputs` 플래그,
+  MCP `flow_list_characters` / `flow_list_media` / `flow_get_media` 툴.
+- **디버그 도구**: `node tools/debug-flow.js [--menus]`로 현재 페이지의 자동화 관련 DOM을
+  덤프할 수 있습니다. 구글 UI 변경으로 셀렉터가 깨졌을 때 원인 파악에 사용하세요.
 
 ---
 

@@ -1,14 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Google Flow CLI Bridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Chrome Extension bridge for Google Flow AI image & video automation from CLI and AI agents",
   "permissions": [
     "tabs",
-    "storage"
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
     "*://labs.google/*",
+    "*://flow.google.com/*",
+    "*://flow-content.google/*",
     "ws://127.0.0.1/*",
     "http://127.0.0.1/*",
     "ws://localhost/*",
@@ -30,7 +33,8 @@
   "content_scripts": [
     {
       "matches": [
-        "*://labs.google/fx/*"
+        "*://labs.google/fx/*",
+        "*://flow.google.com/*"
       ],
       "js": [
         "flow-actions.js",

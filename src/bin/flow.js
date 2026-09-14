@@ -6,6 +6,8 @@ import { handleOpen } from '../commands/open.js';
 import { handleImage } from '../commands/image.js';
 import { handleVideo } from '../commands/video.js';
 import { handleProjects } from '../commands/projects.js';
+import { handleCharacters } from '../commands/characters.js';
+import { handleMedia } from '../commands/media.js';
 import { handleServe } from '../commands/serve.js';
 import { handleMcp } from '../commands/mcp.js';
 
@@ -43,6 +45,7 @@ program
   .description('Generate an image using Google Flow AI models')
   .option('-m, --model <model>', 'Image model ("Nano Banana 2", "Nano Banana Pro", "Imagen 4")', 'Nano Banana 2')
   .option('-r, --ratio <ratio>', 'Aspect ratio ("16:9", "9:16", "1:1", "4:3", "3:4")', '16:9')
+  .option('-n, --outputs <count>', 'Number of outputs per generation (1-4)', '1')
   .option('-o, --output <dir>', 'Directory to save output files', './flow_output')
   .option('--dry-run', 'Setup prompt and model in Flow without clicking generate', false)
   .option('-t, --timeout <seconds>', 'Max generation wait time in seconds', '180')
@@ -58,11 +61,31 @@ program
   .option('-m, --model <model>', 'Video model ("Veo 3.1 - Fast", "Veo 3.1 - Quality", "Omni Flash")', 'Veo 3.1 - Fast')
   .option('-r, --ratio <ratio>', 'Aspect ratio ("16:9", "9:16")', '16:9')
   .option('-d, --duration <duration>', 'Video duration ("4s", "6s", "8s", "10s")', '4s')
+  .option('-n, --outputs <count>', 'Number of outputs per generation (1-4)', '1')
   .option('-o, --output <dir>', 'Directory to save output files', './flow_output')
   .option('--confirm', 'Confirm generation (consumes video credits)', false)
   .action(async (prompt, cmdOptions) => {
     const opts = { ...program.opts(), ...cmdOptions };
     await handleVideo(prompt, opts);
+  });
+
+// flow characters
+program
+  .command('characters')
+  .description('List characters defined in the open Flow project (reference them with @tag)')
+  .action(async (cmdOptions) => {
+    const opts = { ...program.opts(), ...cmdOptions };
+    await handleCharacters(opts);
+  });
+
+// flow media [subcommand] [arg]
+program
+  .command('media [subcommand] [arg]')
+  .description('Manage media in the open project (list, latest [n], get <uuid>)')
+  .option('-o, --output <dir>', 'Directory to save downloaded files', './flow_output')
+  .action(async (subcommand = 'list', arg = null, cmdOptions) => {
+    const opts = { ...program.opts(), ...cmdOptions };
+    await handleMedia(subcommand, arg, opts);
   });
 
 // flow projects [subcommand] [name]

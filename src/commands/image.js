@@ -13,6 +13,7 @@ export async function handleImage(prompt, options = {}) {
 
   const model = options.model || DEFAULT_CONFIG.defaultImageModel;
   const ratio = options.ratio || DEFAULT_CONFIG.defaultRatio;
+  const outputs = Math.min(4, Math.max(1, parseInt(options.outputs, 10) || 1));
   const outputDir = path.resolve(options.output || DEFAULT_CONFIG.outputDir);
   const dryRun = options.dryRun || false;
   const timeoutMs = (parseInt(options.timeout, 10) || 180) * 1000;
@@ -23,6 +24,7 @@ ${chalk.gray('----------------------------------------')}
 ${chalk.bold('Prompt:')}   ${chalk.cyan(prompt)}
 ${chalk.bold('Model:')}    ${chalk.yellow(model)}
 ${chalk.bold('Ratio:')}    ${chalk.blue(ratio)}
+${chalk.bold('Outputs:')}  ${chalk.blue(`x${outputs}`)}
 ${chalk.bold('Output:')}   ${chalk.gray(outputDir)}
 ${dryRun ? chalk.bold.yellow('[DRY RUN - Setup only, will not generate]') : ''}
 ${chalk.gray('----------------------------------------')}
@@ -38,6 +40,7 @@ ${chalk.gray('----------------------------------------')}
         prompt,
         model,
         ratio,
+        outputs,
         dryRun,
         timeoutMs
       },

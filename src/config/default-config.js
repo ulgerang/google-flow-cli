@@ -7,8 +7,10 @@ export const DEFAULT_CONFIG = {
   host: '127.0.0.1',
   wsUrl: 'ws://127.0.0.1:58231',
 
-  // Google Flow URLs
-  flowUrl: 'https://labs.google/fx/tools/flow',
+  // Google Flow URLs (Flow moved from labs.google/fx to flow.google.com; the old
+  // URL redirects, both are supported by the extension)
+  flowUrl: 'https://flow.google.com/',
+  flowUrlLegacy: 'https://labs.google/fx/tools/flow',
   flowUrlFr: 'https://labs.google/fx/fr/tools/flow',
 
   // Supported Image Models

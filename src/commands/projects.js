@@ -12,6 +12,11 @@ export async function handleProjects(subcommand = 'list', name = null, options =
         onStatusUpdate: (msg) => { spinner.text = msg; }
       });
 
+      if (projects && projects.homeRequired) {
+        spinner.info(chalk.yellow(projects.message));
+        return;
+      }
+
       spinner.succeed(chalk.green(`Found ${projects.length} project(s) on Google Flow:`));
 
       if (projects.length === 0) {

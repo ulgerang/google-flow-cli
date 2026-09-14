@@ -12,6 +12,7 @@ export async function handleVideo(prompt, options = {}) {
   const model = options.model || DEFAULT_CONFIG.defaultVideoModel;
   const ratio = options.ratio || DEFAULT_CONFIG.defaultRatio;
   const duration = options.duration || DEFAULT_CONFIG.defaultDuration;
+  const outputs = Math.min(4, Math.max(1, parseInt(options.outputs, 10) || 1));
   const confirm = options.confirm === true;
 
   console.log(`
@@ -21,6 +22,7 @@ ${chalk.bold('Prompt:')}    ${chalk.cyan(prompt)}
 ${chalk.bold('Model:')}     ${chalk.yellow(model)}
 ${chalk.bold('Ratio:')}     ${chalk.blue(ratio)}
 ${chalk.bold('Duration:')}  ${chalk.green(duration)}
+${chalk.bold('Outputs:')}   ${chalk.blue(`x${outputs}`)}
 ${confirm ? chalk.bold.red('⚠️ --confirm passed: Credits will be consumed!') : chalk.bold.yellow('ℹ Setup Mode (No credits consumed without --confirm)')}
 ${chalk.gray('----------------------------------------')}
 `);
@@ -36,6 +38,7 @@ ${chalk.gray('----------------------------------------')}
         model,
         ratio,
         duration,
+        outputs,
         confirm
       },
       {
