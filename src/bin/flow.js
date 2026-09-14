@@ -68,6 +68,8 @@ program
   .option('-o, --output <dir>', 'Directory to save output files', './flow_output')
   .option('--ref <path>', 'Reference image (ingredient) to attach; repeatable', (val, prev = []) => [...prev, val])
   .option('--asset <query>', 'Existing project asset (index or label) to attach as frame/reference; repeatable', (val, prev = []) => [...prev, val])
+  .option('--start-frame <value>', 'First frame: local image path or asset (index/label) — enables Frames-to-Video')
+  .option('--end-frame <value>', 'Last frame: local image path or asset (index/label)')
   .option('--confirm', 'Confirm generation (consumes video credits)', false)
   .action(async (prompt, cmdOptions) => {
     const opts = { ...program.opts(), ...cmdOptions };

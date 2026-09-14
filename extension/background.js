@@ -256,6 +256,44 @@ async function handleBridgeMessage(msg) {
     return;
   }
 
+  if (action === 'set_frame') {
+    // Frames-to-Video: put a local file into the 시작/끝 frame slot of the
+    // video prompt bar (slot picker + debugger file injection).
+    try {
+      const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
+      if (tabs.length === 0) throw new Error('No Google Flow tab is open');
+      const tab = tabs[0];
+
+      const sendToContent = (act, pl) =>
+        new Promise((resolve, reject) => {
+          chrome.tabs.sendMessage(tab.id, { action: act, payload: pl || {}, id }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message + ' — refresh the Flow page'));
+            } else if (response && response.success === false) {
+              reject(new Error(response.error || 'Content action failed'));
+            } else {
+              resolve(response ? response.result : null);
+            }
+          });
+        });
+
+      const opened = await sendToContent('select_frame_slot', { slot: payload.slot || 'start' });
+      if (!opened || !opened.fileInput) {
+        throw new Error('Frame slot did not expose a file input');
+      }
+      await attachFileViaDebugger(tab.id, payload.filePath);
+      const filled = await sendToContent('wait_frame_filled', { slot: payload.slot || 'start', timeoutMs: 30000 });
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: true, result: filled }));
+      }
+    } catch (err) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: false, error: err.message }));
+      }
+    }
+    return;
+  }
+
   if (action === 'attach_ref_file') {
     // Reference image upload: Flow only accepts files through its own picker
     // (hidden <input type=file>). We drive that picker and inject the file via
@@ -457,6 +495,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const attached = await sendToContent('wait_ingredient_attached', { timeoutMs: 20000 });
         await sendToContent('close_ingredient_panel').catch(() => null);
         sendResponse({ attached: attached && attached.attached });
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
+    })();
+    return true; // async sendResponse
+  }
+
+  if (message.type === 'BG_SET_FRAME') {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
+        if (tabs.length === 0) throw new Error('No Google Flow tab is open');
+        const tab = tabs[0];
+
+        const sendToContent = (act, pl) =>
+          new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tab.id, { action: act, payload: pl || {} }, (response) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message + ' — refresh the Flow page'));
+              } else if (response && response.success === false) {
+                reject(new Error(response.error || 'Content action failed'));
+              } else {
+                resolve(response ? response.result : null);
+              }
+            });
+          });
+
+        const opened = await sendToContent('select_frame_slot', { slot: message.payload.slot });
+        if (!opened || !opened.fileInput) {
+          throw new Error('Frame slot did not expose a file input');
+        }
+        await attachFileViaDebugger(tab.id, message.payload.filePath);
+        const filled = await sendToContent('wait_frame_filled', { slot: message.payload.slot, timeoutMs: 30000 });
+        sendResponse({ filled: !!(filled && filled.filled), slot: message.payload.slot });
       } catch (err) {
         sendResponse({ error: err.message });
       }

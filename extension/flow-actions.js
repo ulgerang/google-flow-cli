@@ -1147,6 +1147,67 @@ const FlowActions = {
   },
 
   /**
+   * Probe: open the settings panel and dump everything inside (mode, ratio,
+   * model family, outputs, and any video-specific groups like frames).
+   */
+  async probeSettingsPanel() {
+    await this.openSettings();
+    const dump = {
+      buttons: this.visibleButtons()
+        .filter((b) => {
+          const t = (b.textContent || '') + (b.getAttribute('aria-label') || '');
+          return /x\d|:|동영상|이미지|video|image|프레임|frame|모델|Veo|Nano|Imagen|Omni|crop|선택/i.test(t);
+        })
+        .map((b) => ({
+          role: b.getAttribute('role'),
+          aria: (b.getAttribute('aria-label') || '').slice(0, 60),
+          text: (b.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 70),
+          checked: b.getAttribute('aria-checked')
+        })),
+      headings: Array.from(document.querySelectorAll('[role="group"], [class*="label"], [class*="heading"], legend, label'))
+        .filter((t) => t.offsetParent !== null)
+        .slice(0, 25)
+        .map((t) => (t.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 50))
+        .filter(Boolean)
+    };
+    await this.closeSettings();
+    return dump;
+  },
+
+  /**
+   * Probe: open the add menu, switch to the 업로드 tab, and dump everything
+   * (looks for frame-upload options in video mode).
+   */
+  async probeUploadTab() {
+    await this.openAddMenu();
+    const uploadTab = Array.from(document.querySelectorAll('[role="tab"], mat-list-item')).find(
+      (el) => el.offsetParent !== null && /^(업로드|upload)$/i.test((el.textContent || '').trim())
+    );
+    if (uploadTab) {
+      uploadTab.click();
+      await this.delay(1000);
+    }
+    const dump = {
+      buttons: this.visibleButtons()
+        .filter((b) => {
+          const t = (b.textContent || '') + (b.getAttribute('aria-label') || '');
+          return /업로드|upload|프레임|frame|파일|file|미디어/i.test(t);
+        })
+        .map((b) => ({
+          role: b.getAttribute('role'),
+          aria: (b.getAttribute('aria-label') || '').slice(0, 60),
+          text: (b.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 70)
+        })),
+      texts: Array.from(document.querySelectorAll('[class*="label"], [class*="title"], [class*="hint"], p, span'))
+        .filter((t) => t.offsetParent !== null && /프레임|frame|시작|끝|first|last/i.test(t.textContent || ''))
+        .slice(0, 10)
+        .map((t) => (t.textContent || '').trim().slice(0, 80))
+    };
+    await this.closeOverlays();
+    return dump;
+  },
+
+  /**
    * List the assets shown in the ingredient picker (uploads + generations)
    */
   async listAssets() {
@@ -1239,6 +1300,137 @@ const FlowActions = {
     };
     await this.closeOverlays();
     return dump;
+  },
+
+  /**
+   * Remove ingredient chips from the prompt bar (used after uploading a frame
+   * file through the + menu so it doesn't also act as an ingredient).
+   * The chip's hover overlay holds a cancel icon; clicking it removes the chip.
+   */
+  async removeIngredientChips() {
+    for (let round = 0; round < 8; round++) {
+      const chips = document.querySelectorAll('flow-ingredient-chip button.chip-container');
+      if (chips.length === 0) break;
+      const chip = chips[chips.length - 1];
+      const overlay = chip.querySelector('.hover-icon-overlay');
+      const target = overlay || chip.querySelector('.mat-icon') || chip;
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await this.delay(700);
+    }
+    const left = document.querySelectorAll('flow-ingredient-chip').length;
+    return { removed: left === 0 };
+  },
+
+  /**
+   * Frames-to-Video: select video mode + the "프레임" aspect option, then
+   * expose the 시작/끝 frame slot buttons.
+   */
+  async selectFrameMode() {
+    await this.switchMode('VIDEO');
+    await this.delay(500);
+    await this.openSettings();
+    const target = this.panelRadios().find((r) => /프레임/.test(this.radioLabel(r) || ''));
+    if (!target) {
+      await this.closeSettings();
+      throw new Error('"프레임" 옵션을 찾을 수 없습니다 (Veo 모델이 선택되어 있는지 확인하세요)');
+    }
+    const changed = target.getAttribute('aria-checked') !== 'true';
+    if (changed) {
+      target.click();
+      await this.delay(900);
+    }
+    await this.closeSettings();
+    await this.delay(400);
+    return { frameMode: true, changed };
+  },
+
+  frameSlotButtons() {
+    return Array.from(document.querySelectorAll('.frame-trigger button, [class*="frame-trigger"] button')).filter(
+      (b) => b.offsetParent !== null
+    );
+  },
+
+  /**
+   * Open a frame slot (시작/끝) picker. With assetQuery, pick the asset from
+   * the slot's picker; otherwise open the upload path and wait for the file
+   * input so the background can inject the file.
+   */
+  async openFrameSlot(slot, assetQuery) {
+    const isStart = slot !== 'end';
+    // Slots render in order inside .frame-trigger containers; once filled, the
+    // label text is replaced by a thumbnail, so fall back to positional match.
+    const chips = this.frameSlotButtons();
+    let slotBtn = isStart
+      ? chips.find((b) => /시작|start/i.test(b.textContent)) || chips[0]
+      : chips.find((b) => /종료|끝|end/i.test(b.textContent)) || (chips.length > 1 ? chips[1] : null);
+    if (!slotBtn) {
+      throw new Error(
+        isStart ? '프레임 슬롯을 찾을 수 없습니다 (비디오 모드 + 프레임 옵션 확인)' : '종료 프레임 슬롯이 아직 없습니다 (시작 프레임을 먼저 추가하세요)'
+      );
+    }
+    slotBtn.click();
+    await this.delay(1100);
+
+    if (assetQuery) {
+      const q = String(assetQuery).toLowerCase();
+      const options = Array.from(document.querySelectorAll('[role="option"]')).filter((o) => o.offsetParent !== null);
+      const target = /^\d+$/.test(String(assetQuery).trim())
+        ? options[parseInt(assetQuery, 10) - 1]
+        : options.find((o) => (o.textContent || '').toLowerCase().includes(q));
+      if (!target) {
+        await this.closeOverlays();
+        throw new Error(`프레임 자산을 찾을 수 없습니다: ${assetQuery}`);
+      }
+      target.click();
+      await this.delay(900);
+      const addBtn = this.visibleButtons().find((b) =>
+        /프롬프트에 추가|add to prompt/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || ''))
+      );
+      if (addBtn) {
+        addBtn.click();
+        await this.delay(1200);
+      }
+      await this.closeOverlays();
+      return { opened: true, via: 'asset', slot };
+    }
+
+    // Upload path: slot menu → 업로드 tab → 미디어 업로드 button → file input
+    let input = document.querySelector('input[type="file"]');
+    if (!input) {
+      const uploadTab = Array.from(document.querySelectorAll('[role="tab"], mat-list-item')).find(
+        (el) => el.offsetParent !== null && /^(업로드|upload)$/i.test((el.textContent || '').trim())
+      );
+      if (uploadTab) {
+        uploadTab.click();
+        await this.delay(800);
+      }
+      const uploadBtn = this.visibleButtons().find((b) =>
+        /미디어 업로드|upload media/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || ''))
+      );
+      if (uploadBtn) {
+        uploadBtn.click();
+        await this.delay(1000);
+      }
+      input = await this.waitForPredicate(() => document.querySelector('input[type="file"]'), 8000, 250);
+    }
+    return { opened: true, via: 'upload', slot, fileInput: !!input };
+  },
+
+  /**
+   * Wait until the given frame slot shows a filled thumbnail.
+   */
+  async waitFrameFilled(slot, timeoutMs = 30000) {
+    const isStart = slot !== 'end';
+    await this.waitForPredicate(() => {
+      const chips = this.frameSlotButtons();
+      const btn = isStart
+        ? chips.find((b) => /시작|start/i.test(b.textContent) || b.querySelector('img'))
+        : chips.find((b) => /종료|끝|end/i.test(b.textContent) || b.querySelector('img'));
+      if (!btn) return false;
+      // filled when the slot shows an image thumbnail
+      return !!btn.querySelector('img, [style*="background-image"]');
+    }, timeoutMs, 500);
+    return { filled: true, slot };
   },
 
   /**

@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { BridgeClient } from '../bridge/client.js';
 import { loadRefImage } from '../utils/ref-image.js';
+import { resolveFrames } from '../utils/frames.js';
 import { DEFAULT_CONFIG } from '../config/default-config.js';
 
 export async function handleVideo(prompt, options = {}) {
@@ -16,6 +17,7 @@ export async function handleVideo(prompt, options = {}) {
   const outputs = Math.min(4, Math.max(1, parseInt(options.outputs, 10) || 1));
   const refs = (options.ref || []).map(loadRefImage);
   const assets = (options.asset || []).map(String);
+  const frames = resolveFrames(options);
   const confirm = options.confirm === true;
 
   console.log(`
@@ -26,7 +28,7 @@ ${chalk.bold('Model:')}     ${chalk.yellow(model)}
 ${chalk.bold('Ratio:')}     ${chalk.blue(ratio)}
 ${chalk.bold('Duration:')}  ${chalk.green(duration)}
 ${chalk.bold('Outputs:')}   ${chalk.blue(`x${outputs}`)}
-${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${assets.length ? `${chalk.bold('Assets:')}   ${chalk.cyan(assets.join(', '))}\n` : ''}${confirm ? chalk.bold.red('⚠️ --confirm passed: Credits will be consumed!') : chalk.bold.yellow('ℹ Setup Mode (No credits consumed without --confirm)')}
+${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${assets.length ? `${chalk.bold('Assets:')}   ${chalk.cyan(assets.join(', '))}\n` : ''}${frames.start ? `${chalk.bold('Start frame:')} ${chalk.cyan(frames.start.name || frames.start.query)}\n` : ''}${frames.end ? `${chalk.bold('End frame:')}   ${chalk.cyan(frames.end.name || frames.end.query)}\n` : ''}${confirm ? chalk.bold.red('⚠️ --confirm passed: Credits will be consumed!') : chalk.bold.yellow('ℹ Setup Mode (No credits consumed without --confirm)')}
 ${chalk.gray('----------------------------------------')}
 `);
 
@@ -44,6 +46,7 @@ ${chalk.gray('----------------------------------------')}
         outputs,
         refs,
         assets,
+        frames: Object.keys(frames).length ? frames : undefined,
         confirm
       },
       {
@@ -55,8 +58,16 @@ ${chalk.gray('----------------------------------------')}
 
     if (!confirm) {
       spinner.succeed(chalk.green('Video setup completed in Google Flow!'));
+      if (result.frames) {
+        console.log(chalk.gray(`Frames: ${JSON.stringify(result.frames)}`));
+      }
+      if (result.refs) {
+        console.log(chalk.gray(`Ingredients/refs: ${JSON.stringify(result.refs)}`));
+      }
+      if (result.activeSettings) {
+        console.log(chalk.gray(`Active settings: ${JSON.stringify(result.activeSettings)}`));
+      }
       console.log(`
-${chalk.cyan(result.message)}
 ${chalk.yellow('To trigger generation and consume video credits, re-run with the ' + chalk.bold('--confirm') + ' flag.')}
 `);
       return;

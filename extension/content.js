@@ -252,7 +252,17 @@
 
       case 'generate_video':
         runAsync(async () => {
-          const { prompt, model, ratio, duration, outputs, refs = [], confirm = false } = payload;
+          const {
+            prompt,
+            model,
+            ratio,
+            duration,
+            outputs,
+            refs = [],
+            assets = [],
+            frames,
+            confirm = false
+          } = payload;
 
           // 1. Ensure project
           await FlowActions.ensureProject();
@@ -262,38 +272,87 @@
           await FlowActions.switchMode('VIDEO');
           await FlowActions.delay(500);
 
+          // 2b. Frames-to-Video: when start/end frames are given, switch the
+          // aspect to "프레임" so the prompt bar exposes 시작/끝 frame slots.
+          const frameSpecs = [];
+          if (frames) {
+            if (frames.start) frameSpecs.push({ slot: 'start', ...frames.start });
+            if (frames.end) frameSpecs.push({ slot: 'end', ...frames.end });
+          }
+
           // 3. Model & ratio & duration & outputs
           if (model) await FlowActions.selectModel(model);
-          if (ratio) await FlowActions.selectRatio(ratio);
+          if (!frames && ratio) await FlowActions.selectRatio(ratio);
           if (duration) await FlowActions.selectDuration(duration);
           if (outputs) await FlowActions.selectOutputs(outputs);
 
-          // 4. Attach references: existing assets first (in video mode an image
-          // ingredient acts as the frame/reference), then file uploads
-          const attachedRefs = [];
-          for (const assetQuery of assets) {
-            try {
-              const r = await FlowActions.attachAssetAsIngredient(assetQuery);
-              attachedRefs.push(r.asset || String(assetQuery));
-            } catch (aErr) {
-              attachedRefs.push({ asset: assetQuery, error: aErr.message });
-            }
-          }
-          for (const ref of refs) {
-            try {
+          // 3b. Fill frame slots (시작 → 종료). File specs are uploaded to the
+          // project assets through the + menu first (frame slots only accept
+          // asset picks), then picked by file name.
+          const attachedFrames = [];
+          if (frameSpecs.length) {
+            for (const spec of frameSpecs.filter((s) => s.type === 'file')) {
               await new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage(
-                  { type: 'BG_ATTACH_REF', payload: { filePath: ref.path } },
+                  { type: 'BG_ATTACH_REF', payload: { filePath: spec.path } },
                   (resp) => {
                     if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
                     else if (resp && resp.error) reject(new Error(resp.error));
                     else resolve(resp);
                   }
                 );
+              }).catch((uploadErr) => {
+                console.warn('[Flow-CLI] Frame file upload failed:', uploadErr.message);
               });
-              attachedRefs.push(ref.name || 'reference');
-            } catch (refErr) {
-              attachedRefs.push({ name: ref.name, error: refErr.message });
+              spec.query = spec.name; // uploaded asset is labeled with the file name
+              spec.type = 'asset';
+              await FlowActions.delay(3000); // let the asset finish processing
+            }
+            // The uploads also landed as ingredient chips — clear them so only
+            // the frame slots drive the generation.
+            await FlowActions.removeIngredientChips().catch(() => null);
+            await FlowActions.selectFrameMode();
+            for (const spec of frameSpecs) {
+              try {
+                await FlowActions.openFrameSlot(spec.slot, spec.query);
+                await FlowActions.waitFrameFilled(spec.slot, 30000).catch(() => null);
+                attachedFrames.push(spec.slot);
+              } catch (fErr) {
+                console.warn('[Flow-CLI] Frame attach failed:', spec.slot, fErr.message);
+                attachedFrames.push({ slot: spec.slot, error: fErr.message });
+              }
+            }
+          }
+
+          // 4. Attach references (ingredient path — skipped in frame mode where
+          // the + menu is replaced by frame slots): existing assets first, then
+          // file uploads
+          const attachedRefs = [];
+          if (!frameSpecs.length) {
+            for (const assetQuery of assets) {
+              try {
+                const r = await FlowActions.attachAssetAsIngredient(assetQuery);
+                attachedRefs.push(r.asset || String(assetQuery));
+              } catch (aErr) {
+                attachedRefs.push({ asset: assetQuery, error: aErr.message });
+              }
+            }
+            for (const ref of refs) {
+              try {
+                await new Promise((resolve, reject) => {
+                  chrome.runtime.sendMessage(
+                    { type: 'BG_ATTACH_REF', payload: { filePath: ref.path } },
+                    (resp) => {
+                      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                      else if (resp && resp.error) reject(new Error(resp.error));
+                      else resolve(resp);
+                    }
+                  );
+                });
+                attachedRefs.push(ref.name || 'reference');
+              } catch (refErr) {
+                attachedRefs.push({ name: ref.name, error: refErr.message });
+              }
             }
           }
 
@@ -312,6 +371,7 @@
               duration,
               outputs,
               refs: attachedRefs,
+              frames: attachedFrames,
               activeSettings: settings
             };
           }
@@ -531,6 +591,59 @@
         runAsync(async () => FlowActions.probeAddMenu());
         return true;
 
+      case 'probe_settings_video':
+        runAsync(async () => {
+          await FlowActions.switchMode('VIDEO');
+          await FlowActions.delay(600);
+          return await FlowActions.probeSettingsPanel();
+        });
+        return true;
+
+      case 'probe_upload_tab':
+        runAsync(async () => {
+          await FlowActions.switchMode('VIDEO');
+          await FlowActions.delay(600);
+          return await FlowActions.probeUploadTab();
+        });
+        return true;
+
+      case 'select_settings_radio':
+        runAsync(async () => {
+          const { label, mode } = payload || {};
+          if (!label) throw new Error('select_settings_radio requires payload.label');
+          // mode: 'VIDEO'/'IMAGE' switches mode first when needed
+          if (mode) await FlowActions.switchMode(mode);
+          const r = await (async () => {
+            await FlowActions.openSettings();
+            const target = FlowActions.panelRadios().find((radio) => {
+              const lab = (FlowActions.radioLabel(radio) || '').replace(/\s+/g, '');
+              return lab.includes(String(label).replace(/\s+/g, ''));
+            });
+            if (!target) return { selected: false, label };
+            const changed = target.getAttribute('aria-checked') !== 'true';
+            if (changed) {
+              target.click();
+              await FlowActions.delay(700);
+            }
+            await FlowActions.closeSettings();
+            return { selected: true, changed, label };
+          })();
+          return r;
+        });
+        return true;
+
+      case 'probe_ingredient_chip':
+        runAsync(async () => {
+          const chip = document.querySelector('flow-ingredient-chip button.chip-container, button.chip-container[aria-label="소재"]');
+          if (!chip || chip.offsetParent === null) throw new Error('ingredient chip not found');
+          chip.click();
+          await FlowActions.delay(1200);
+          const dump = FlowActions.dumpDialogFields();
+          await FlowActions.closeOverlays();
+          return dump;
+        });
+        return true;
+
       case 'probe_characters':
         runAsync(async () => FlowActions.probeCharacters());
         return true;
@@ -541,6 +654,21 @@
 
       case 'dump_dialog':
         runAsync(async () => FlowActions.dumpDialogFields());
+        return true;
+
+      case 'select_frame_slot':
+        runAsync(async () => {
+          const { slot = 'start', assetQuery } = payload || {};
+          await FlowActions.selectFrameMode();
+          return await FlowActions.openFrameSlot(slot, assetQuery);
+        });
+        return true;
+
+      case 'wait_frame_filled':
+        runAsync(async () => {
+          const { slot = 'start', timeoutMs = 30000 } = payload || {};
+          return await FlowActions.waitFrameFilled(slot, timeoutMs);
+        });
         return true;
 
       case 'fetch_media':
