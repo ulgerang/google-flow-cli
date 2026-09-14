@@ -15,6 +15,7 @@ export async function handleVideo(prompt, options = {}) {
   const duration = options.duration || DEFAULT_CONFIG.defaultDuration;
   const outputs = Math.min(4, Math.max(1, parseInt(options.outputs, 10) || 1));
   const refs = (options.ref || []).map(loadRefImage);
+  const assets = (options.asset || []).map(String);
   const confirm = options.confirm === true;
 
   console.log(`
@@ -25,7 +26,7 @@ ${chalk.bold('Model:')}     ${chalk.yellow(model)}
 ${chalk.bold('Ratio:')}     ${chalk.blue(ratio)}
 ${chalk.bold('Duration:')}  ${chalk.green(duration)}
 ${chalk.bold('Outputs:')}   ${chalk.blue(`x${outputs}`)}
-${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${confirm ? chalk.bold.red('⚠️ --confirm passed: Credits will be consumed!') : chalk.bold.yellow('ℹ Setup Mode (No credits consumed without --confirm)')}
+${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${assets.length ? `${chalk.bold('Assets:')}   ${chalk.cyan(assets.join(', '))}\n` : ''}${confirm ? chalk.bold.red('⚠️ --confirm passed: Credits will be consumed!') : chalk.bold.yellow('ℹ Setup Mode (No credits consumed without --confirm)')}
 ${chalk.gray('----------------------------------------')}
 `);
 
@@ -42,6 +43,7 @@ ${chalk.gray('----------------------------------------')}
         duration,
         outputs,
         refs,
+        assets,
         confirm
       },
       {

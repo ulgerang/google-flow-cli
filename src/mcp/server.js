@@ -77,6 +77,11 @@ export async function runMcpServer(options = {}) {
                 items: { type: 'string', description: 'Absolute path to a local reference image (png/jpg/webp/gif)' },
                 description: 'Reference images (ingredients) attached to the prompt for guidance'
               },
+              assets: {
+                type: 'array',
+                items: { type: 'string', description: 'Asset label substring or 1-based index (see flow_list_assets)' },
+                description: 'Existing project assets attached as reference ingredients'
+              },
               output_dir: {
                 type: 'string',
                 description: 'Directory path to save generated images',
@@ -132,6 +137,51 @@ export async function runMcpServer(options = {}) {
             type: 'object',
             properties: {},
             required: []
+          }
+        },
+        {
+          name: 'flow_list_assets',
+          description: 'List registered assets (uploads + generated media) in the open Flow project, usable as --asset references',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        },
+        {
+          name: 'flow_create_character',
+          description: 'Create a Flow character from a text description (generates the character look; may take a minute)',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              description: { type: 'string', description: 'Character description (look, outfit, personality)' },
+              preset: { type: 'string', description: 'Optional preset card name, e.g. "괴짜", "프로페셔널"' }
+            },
+            required: ['description']
+          }
+        },
+        {
+          name: 'flow_rename_character',
+          description: 'Rename a character (and optionally update its personality description)',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Current character name (or substring)' },
+              new_name: { type: 'string', description: 'New character name' },
+              personality: { type: 'string', description: 'Optional new personality text' }
+            },
+            required: ['name', 'new_name']
+          }
+        },
+        {
+          name: 'flow_delete_character',
+          description: 'Delete a character by name (or name substring)',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Character name (or substring) to delete' }
+            },
+            required: ['name']
           }
         },
         {
@@ -247,6 +297,7 @@ export async function runMcpServer(options = {}) {
           ratio,
           outputs: Math.min(4, Math.max(1, parseInt(args.outputs, 10) || 1)),
           refs,
+          assets: (args.assets || []).map(String),
           dryRun,
           timeoutMs: 180000
         });
@@ -334,10 +385,40 @@ export async function runMcpServer(options = {}) {
       }
 
       if (name === 'flow_list_characters') {
-        const result = await client.execute('list_characters', {}, { timeoutMs: 20000 });
+        const result = await client.execute('list_characters', {}, { timeoutMs: 30000 });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
         };
+      }
+
+      if (name === 'flow_list_assets') {
+        const result = await client.execute('list_assets', {}, { timeoutMs: 25000 });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+        };
+      }
+
+      if (name === 'flow_create_character') {
+        const result = await client.execute(
+          'create_character',
+          { description: args.description, preset: args.preset, timeoutMs: 120000 },
+          { timeoutMs: 150000 }
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (name === 'flow_rename_character') {
+        const result = await client.execute(
+          'rename_character',
+          { name: args.name, newName: args.new_name, personality: args.personality },
+          { timeoutMs: 60000 }
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      if (name === 'flow_delete_character') {
+        const result = await client.execute('delete_character', { name: args.name }, { timeoutMs: 60000 });
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
       if (name === 'flow_list_media') {

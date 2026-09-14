@@ -193,16 +193,31 @@ flow image "A watercolor city" --outputs 4
 # 로컬 이미지를 소재로 붙여 레퍼런스 기반 생성 (여러 개 반복 가능)
 flow image "Turn this character into a plush toy" --ref "D:\refs\character.png"
 
-# 동영상에도 소재 첨부 가능
-flow video "The character walks through fog" --ref "D:\refs\character.png" --confirm
+# 등록된 자산(업로드/생성물)을 레퍼런스로 사용
+flow assets                     # 등록된 자산 목록 조회 (인덱스·라벨)
+flow image "The cat waves hello" --asset 14     # 인덱스로 지정
+flow image "..." --asset "Orange cat"           # 라벨 일부로 지정
+
+# 동영상: 이미지 소재가 프레임/레퍼런스로 사용됨
+flow video "The character walks through fog" --asset "Orange cat" --confirm
 ```
-- 소재는 Flow 프롬프트 창의 "＋ 소재 추가 → 미디어 업로드" 경로로 업로드되며,
-  확장 프로그램이 내부적으로 디버거 프로토콜(chrome.debugger)로 파일을 주입합니다.
-  업로드 중 브라우저 상단에 디버깅 안내 배너가 잠깐 표시될 수 있습니다(정상).
+- 소재는 Flow 프롬프트 창의 "＋ 소재 추가" 경로로 업로드되며, 확장 프로그램이
+  내부적으로 디버거 프로토콜(chrome.debugger)로 파일을 주입합니다. 업로드 중
+  브라우저 상단에 디버깅 안내 배너가 잠깐 표시될 수 있습니다(정상).
 - 이미지(png/jpg/webp/gif)를 지원합니다. 동일 파일을 반복 사용하면 프로젝트
   자산에 여러 복사본이 쌓일 수 있습니다.
 
-### 10. 상시 브리지 서버 실행 (`flow serve`)
+### 10. 캐릭터 CRUD 🆕
+```bash
+flow characters list                          # 캐릭터 목록
+flow characters create "친절한 로봇 바리스타 로보"  # 설명으로 생성 (1~2분 소요)
+flow characters rename "제목 없는 캐릭터" --name "로보" --personality "유쾌한 성격"
+flow characters delete "로보"                 # 삭제 (상세 페이지의 휴지통 경로)
+```
+- 생성은 현재 이미지 모델로 캐릭터 외모를 만들며 완료 후 상세 페이지 URL을
+  출력합니다. 프롬프트에서 @태그로 캐릭터를 재사용할 수 있습니다.
+
+### 11. 상시 브리지 서버 실행 (`flow serve`)
 백그라운드 또는 별도 터미널에서 상시 브리지 서버를 켜두고 여러 명령을 빠르게 수행할 수 있습니다:
 ```bash
 flow serve

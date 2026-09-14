@@ -84,7 +84,7 @@
 
       case 'generate_image':
         runAsync(async () => {
-          const { prompt, model, ratio, outputs, refs = [], dryRun, timeoutMs = 180000 } = payload;
+          const { prompt, model, ratio, outputs, refs = [], assets = [], dryRun, timeoutMs = 180000 } = payload;
 
           // 1. Ensure project context
           await FlowActions.ensureProject();
@@ -103,9 +103,17 @@
           // creates a new project tile which must not be mistaken for output
           const initialKeys = FlowActions.getMediaItems().map((i) => i.src);
 
-          // 5. Attach reference images (ingredients) through the background
-          // (Flow's picker needs files injected via the debugger protocol)
+          // 5. Attach references: existing assets first (fast), then file uploads
           const attachedRefs = [];
+          for (const assetQuery of assets) {
+            try {
+              const r = await FlowActions.attachAssetAsIngredient(assetQuery);
+              attachedRefs.push(r.asset || String(assetQuery));
+            } catch (aErr) {
+              console.warn('[Flow-CLI] Asset attach failed:', assetQuery, aErr.message);
+              attachedRefs.push({ asset: assetQuery, error: aErr.message });
+            }
+          }
           for (const ref of refs) {
             try {
               const r = await new Promise((resolve, reject) => {
@@ -128,7 +136,7 @@
           // The uploaded ingredient's own tile renders asynchronously; wait until
           // the media tile set is stable (two identical consecutive scans) and
           // fold everything into the baseline so only real output counts as new.
-          if (refs.length) {
+          if (refs.length || assets.length) {
             let lastKeys = null;
             const t0 = Date.now();
             while (Date.now() - t0 < 40000) {
@@ -260,8 +268,17 @@
           if (duration) await FlowActions.selectDuration(duration);
           if (outputs) await FlowActions.selectOutputs(outputs);
 
-          // 4. Attach reference images through the background
+          // 4. Attach references: existing assets first (in video mode an image
+          // ingredient acts as the frame/reference), then file uploads
           const attachedRefs = [];
+          for (const assetQuery of assets) {
+            try {
+              const r = await FlowActions.attachAssetAsIngredient(assetQuery);
+              attachedRefs.push(r.asset || String(assetQuery));
+            } catch (aErr) {
+              attachedRefs.push({ asset: assetQuery, error: aErr.message });
+            }
+          }
           for (const ref of refs) {
             try {
               await new Promise((resolve, reject) => {
@@ -294,6 +311,7 @@
               ratio,
               duration,
               outputs,
+              refs: attachedRefs,
               activeSettings: settings
             };
           }
@@ -317,6 +335,39 @@
       case 'list_characters':
         runAsync(async () => {
           return await FlowActions.listCharactersFromPage();
+        });
+        return true;
+
+      case 'create_character':
+        runAsync(async () => {
+          const { description, preset, timeoutMs } = payload || {};
+          return await FlowActions.createCharacter(description, preset, timeoutMs);
+        });
+        return true;
+
+      case 'delete_character':
+        runAsync(async () => {
+          const { name } = payload || {};
+          if (!name) throw new Error('delete_character requires payload.name');
+          return await FlowActions.deleteCharacter(name);
+        });
+        return true;
+
+      case 'rename_character':
+        runAsync(async () => {
+          const { name, newName, personality } = payload || {};
+          if (!name || (!newName && !personality)) {
+            throw new Error('rename_character requires payload.name and (newName or personality)');
+          }
+          return await FlowActions.renameCharacter(name, newName, personality);
+        });
+        return true;
+
+      case 'open_character_detail':
+        runAsync(async () => {
+          const { name } = payload || {};
+          if (!name) throw new Error('open_character_detail requires payload.name');
+          return await FlowActions.openCharacterDetail(name);
         });
         return true;
 
@@ -462,6 +513,34 @@
           }
           return { closed: !document.querySelector('[role="dialog"]') };
         });
+        return true;
+
+      case 'list_assets':
+        runAsync(async () => FlowActions.listAssets());
+        return true;
+
+      case 'attach_asset':
+        runAsync(async () => {
+          const { query } = payload || {};
+          if (query === undefined) throw new Error('attach_asset requires payload.query (label substring or 1-based index)');
+          return await FlowActions.attachAssetAsIngredient(query);
+        });
+        return true;
+
+      case 'probe_add_menu':
+        runAsync(async () => FlowActions.probeAddMenu());
+        return true;
+
+      case 'probe_characters':
+        runAsync(async () => FlowActions.probeCharacters());
+        return true;
+
+      case 'probe_character_create':
+        runAsync(async () => FlowActions.probeCharacterCreate());
+        return true;
+
+      case 'dump_dialog':
+        runAsync(async () => FlowActions.dumpDialogFields());
         return true;
 
       case 'fetch_media':

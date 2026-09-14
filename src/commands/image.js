@@ -14,6 +14,7 @@ export async function handleImage(prompt, options = {}) {
   }
 
   const refs = (options.ref || []).map(loadRefImage);
+  const assets = (options.asset || []).map(String);
   const model = options.model || DEFAULT_CONFIG.defaultImageModel;
   const ratio = options.ratio || DEFAULT_CONFIG.defaultRatio;
   const outputs = Math.min(4, Math.max(1, parseInt(options.outputs, 10) || 1));
@@ -28,7 +29,7 @@ ${chalk.bold('Prompt:')}   ${chalk.cyan(prompt)}
 ${chalk.bold('Model:')}    ${chalk.yellow(model)}
 ${chalk.bold('Ratio:')}    ${chalk.blue(ratio)}
 ${chalk.bold('Outputs:')}  ${chalk.blue(`x${outputs}`)}
-${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${chalk.bold('Output:')}   ${chalk.gray(outputDir)}
+${refs.length ? `${chalk.bold('Refs:')}     ${chalk.cyan(refs.map((r) => r.name).join(', '))}\n` : ''}${assets.length ? `${chalk.bold('Assets:')}   ${chalk.cyan(assets.join(', '))}\n` : ''}${chalk.bold('Output:')}   ${chalk.gray(outputDir)}
 ${dryRun ? chalk.bold.yellow('[DRY RUN - Setup only, will not generate]') : ''}
 ${chalk.gray('----------------------------------------')}
 `);
@@ -45,6 +46,7 @@ ${chalk.gray('----------------------------------------')}
         ratio,
         outputs,
         refs,
+        assets,
         dryRun,
         timeoutMs
       },

@@ -7,6 +7,7 @@ import { handleImage } from '../commands/image.js';
 import { handleVideo } from '../commands/video.js';
 import { handleProjects } from '../commands/projects.js';
 import { handleCharacters } from '../commands/characters.js';
+import { handleAssets } from '../commands/assets.js';
 import { handleMedia } from '../commands/media.js';
 import { handleServe } from '../commands/serve.js';
 import { handleMcp } from '../commands/mcp.js';
@@ -48,6 +49,7 @@ program
   .option('-n, --outputs <count>', 'Number of outputs per generation (1-4)', '1')
   .option('-o, --output <dir>', 'Directory to save output files', './flow_output')
   .option('--ref <path>', 'Reference image (ingredient) to attach; repeatable', (val, prev = []) => [...prev, val])
+  .option('--asset <query>', 'Existing project asset (index or label) to attach as reference; repeatable', (val, prev = []) => [...prev, val])
   .option('--dry-run', 'Setup prompt and model in Flow without clicking generate', false)
   .option('-t, --timeout <seconds>', 'Max generation wait time in seconds', '180')
   .action(async (prompt, cmdOptions) => {
@@ -65,6 +67,7 @@ program
   .option('-n, --outputs <count>', 'Number of outputs per generation (1-4)', '1')
   .option('-o, --output <dir>', 'Directory to save output files', './flow_output')
   .option('--ref <path>', 'Reference image (ingredient) to attach; repeatable', (val, prev = []) => [...prev, val])
+  .option('--asset <query>', 'Existing project asset (index or label) to attach as frame/reference; repeatable', (val, prev = []) => [...prev, val])
   .option('--confirm', 'Confirm generation (consumes video credits)', false)
   .action(async (prompt, cmdOptions) => {
     const opts = { ...program.opts(), ...cmdOptions };
@@ -73,11 +76,22 @@ program
 
 // flow characters
 program
-  .command('characters')
-  .description('List characters defined in the open Flow project (reference them with @tag)')
+  .command('characters [action] [value]')
+  .description('Manage Flow characters: list | create <description> | rename <name> | delete <name>')
+  .option('--name <name>', 'New name for rename')
+  .option('--personality <text>', 'Personality text for rename')
+  .action(async (action = 'list', value = null, cmdOptions) => {
+    const opts = { ...program.opts(), ...cmdOptions };
+    await handleCharacters(action, value, opts);
+  });
+
+// flow assets
+program
+  .command('assets')
+  .description('List registered assets (uploads + generations) usable as --asset references')
   .action(async (cmdOptions) => {
     const opts = { ...program.opts(), ...cmdOptions };
-    await handleCharacters(opts);
+    await handleAssets(opts);
   });
 
 // flow media [subcommand] [arg]

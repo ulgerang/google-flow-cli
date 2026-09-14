@@ -4,3 +4,4 @@ test_output/
 *.log
 .DS_Store
 Thumbs.db
+dump_tmp.json

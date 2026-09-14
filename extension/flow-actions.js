@@ -681,40 +681,299 @@ const FlowActions = {
   },
 
   /**
+   * Navigate to the characters UI. Returns which page we landed on:
+   * 'detail_page', 'create_page' or 'list_page'.
+   */
+  async openCharactersPage() {
+    const path = window.location.pathname;
+    // From a character detail page, go back to the list first
+    if (/\/character\/[a-f0-9-]+/i.test(path)) {
+      const back = this.visibleButtons().find((b) => /뒤로|back/i.test(b.getAttribute('aria-label') || ''));
+      if (back) {
+        back.click();
+        await this.delay(1600);
+      }
+    }
+    if (window.location.pathname.endsWith('/character')) return 'create_page';
+    const tab =
+      this.findNavElement(/^(캐릭터|characters?)$/i) || this.findNavElement(/^(캐릭터|characters?)/i);
+    if (!tab) throw new Error('캐릭터 탭을 찾을 수 없습니다 — 프로젝트를 먼저 여세요 (`flow open`)');
+    tab.click();
+    await this.delay(2200);
+    if (/\/character\/[a-f0-9-]+/i.test(window.location.pathname)) return 'detail_page';
+    return window.location.pathname.endsWith('/character') ? 'create_page' : 'list_page';
+  },
+
+  /**
+   * Open a specific character's detail page by label substring (list page).
+   */
+  async openCharacterDetail(name) {
+    const page = await this.openCharactersPage();
+    if (page === 'create_page') throw new Error('이 프로젝트에는 캐릭터가 없습니다');
+    const q = String(name).toLowerCase();
+    const card = Array.from(
+      document.querySelectorAll('[class*="character-card"], [class*="character-tile"], li, article, [class*="card"]')
+    ).find((c) => {
+      if (!c.offsetParent) return false;
+      const t = (c.textContent || '').trim();
+      return t.length > 2 && t.length < 300 && t.toLowerCase().includes(q);
+    });
+    if (!card) throw new Error(`캐릭터를 찾을 수 없습니다: ${name}`);
+    card.click();
+    await this.delay(1800);
+    if (!/\/character\/[a-f0-9-]+/i.test(window.location.pathname)) {
+      throw new Error(`캐릭터 상세 페이지를 열지 못했습니다: ${name}`);
+    }
+    return { opened: true, url: window.location.pathname };
+  },
+
+  /**
+   * Rename (and optionally update the personality of) the character currently
+   * open in the detail page. The edit mode exposes a top title input, a
+   * "캐릭터 이름" field and a "캐릭터 성격" textarea, saved with "완료".
+   */
+  async renameCurrentCharacter(newName, personality) {
+    if (!/\/character\/[a-f0-9-]+/i.test(window.location.pathname)) {
+      throw new Error('캐릭터 상세 페이지가 열려 있지 않습니다');
+    }
+    if (!newName && !personality) throw new Error('newName 또는 personality 중 하나는 필요합니다');
+
+    const editBtn = this.visibleButtons().find((b) => /이름 수정|rename/i.test(b.getAttribute('aria-label') || ''));
+    if (!editBtn) throw new Error('이름 수정 버튼을 찾을 수 없습니다');
+    editBtn.click();
+    await this.delay(700);
+
+    const setNativeValue = (el, value) => {
+      const proto = Object.getPrototypeOf(el);
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      setter.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
+    if (newName) {
+      const nameInput =
+        document.querySelector('input[aria-label="캐릭터 이름"], input.name-input') ||
+        document.querySelector('input.editable-text-input') ||
+        document.querySelector('input[type="text"]');
+      if (!nameInput) throw new Error('이름 입력창이 나타나지 않았습니다');
+      // Angular inputs: focus + select-all + execCommand insertText mirrors real typing
+      nameInput.focus();
+      await this.delay(150);
+      nameInput.select && nameInput.select();
+      const okCmd = document.execCommand('insertText', false, newName);
+      if (!okCmd || nameInput.value !== newName) {
+        setNativeValue(nameInput, newName);
+      }
+      nameInput.dispatchEvent(new Event('change', { bubbles: true }));
+      nameInput.dispatchEvent(new Event('blur', { bubbles: true }));
+      await this.delay(300);
+    }
+
+    if (personality) {
+      const textarea =
+        document.querySelector('textarea[aria-label="캐릭터 성격"], textarea.personality-textarea') ||
+        document.querySelector('textarea');
+      if (!textarea) throw new Error('성격 입력창이 나타나지 않았습니다');
+      textarea.focus();
+      await this.delay(150);
+      textarea.select && textarea.select();
+      const okCmd = document.execCommand('insertText', false, personality);
+      if (!okCmd || textarea.value !== personality) {
+        setNativeValue(textarea, personality);
+      }
+      textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      textarea.dispatchEvent(new Event('blur', { bubbles: true }));
+      await this.delay(300);
+    }
+
+    // Save with 완료 (fallback: Enter on the name input)
+    const doneBtn = this.visibleButtons().find((b) => /^완료$/.test((b.textContent || '').trim()));
+    if (doneBtn) {
+      doneBtn.click();
+    } else if (newName) {
+      const nameInput = document.querySelector('input[aria-label="캐릭터 이름"], input.editable-text-input');
+      if (nameInput) nameInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    }
+    await this.delay(1200);
+
+    const body = document.body.textContent || '';
+    return {
+      renamed: newName ? body.includes(newName) : null,
+      personalitySet: personality ? body.includes(personality.slice(0, 15)) : null,
+      name: newName
+    };
+  },
+
+  /**
+   * Delete the character currently open in the detail page (휴지통 아이콘),
+   * confirming the dialog. Note: the separate "이미지 삭제" button only removes
+   * the portrait image.
+   */
+  async deleteCurrentCharacter() {
+    if (!/\/character\/[a-f0-9-]+/i.test(window.location.pathname)) {
+      throw new Error('캐릭터 상세 페이지가 열려 있지 않습니다');
+    }
+    const delBtn = this.visibleButtons().find(
+      (b) => (b.getAttribute('aria-label') || '').trim() === '삭제'
+    );
+    if (!delBtn) throw new Error('삭제 버튼을 찾을 수 없습니다');
+    delBtn.click();
+    await this.delay(900);
+
+    // Confirmation dialog
+    const confirmBtn = Array.from(document.querySelectorAll('[role="dialog"] button, button')).find((b) => {
+      if (!b.offsetParent) return false;
+      const t = ((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')).trim().toLowerCase();
+      return /^(삭제|delete|확인|confirm|삭제합니다?)$/.test(t);
+    });
+    if (confirmBtn) {
+      confirmBtn.click();
+      await this.delay(1500);
+    }
+    const gone = !/\/character\/[a-f0-9-]+/i.test(window.location.pathname);
+    return { deleted: gone };
+  },
+
+  /**
+   * Create a character from a text description (Flow generates the look with
+   * the current image model). Optional preset card name ("괴짜", "프로페셔널"...).
+   * Resolves with the page snapshot after Flow finishes (or times out).
+   */
+  async createCharacter(description, presetName, timeoutMs = 120000) {
+    if (!description || !description.trim()) throw new Error('캐릭터 설명(description)이 필요합니다');
+    const page = await this.openCharactersPage();
+
+    if (page === 'list_page') {
+      // From the list, open the creation page
+      const newBtn =
+        this.visibleButtons().find((b) =>
+          /신규\s*캐릭터|새\s*캐릭터|new character|캐릭터 만들/i.test(
+            (b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')
+          )
+        ) || this.findNavElement(/신규\s*캐릭터|새\s*캐릭터|new character/i);
+      if (!newBtn) throw new Error('캐릭터 목록에서 만들기 버튼을 찾을 수 없습니다');
+      newBtn.click();
+      await this.delay(2000);
+    }
+
+    if (presetName) {
+      const card = this.findNavElement(new RegExp(String(presetName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+      if (card) {
+        card.click();
+        await this.delay(1000);
+      }
+    }
+
+    const editor = document.querySelector('div.ProseMirror[contenteditable="true"]');
+    if (!editor) throw new Error('캐릭터 설명 입력창을 찾을 수 없습니다');
+    editor.focus();
+    await this.delay(200);
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+    document.execCommand('insertText', false, description);
+    this.dispatchInputEvents(editor);
+    await this.delay(800);
+
+    const genBtn = this.visibleButtons().find(
+      (b) =>
+        /생성\s*시작|create|generate/i.test(b.getAttribute('aria-label') || '') ||
+        (b.textContent || '').includes('arrow_forward')
+    );
+    if (!genBtn) throw new Error('생성 버튼을 찾을 수 없습니다');
+    if (genBtn.disabled || genBtn.getAttribute('aria-disabled') === 'true') {
+      throw new Error('생성 버튼이 비활성화되어 있습니다 (설명을 입력했는지 확인하세요)');
+    }
+    genBtn.click();
+
+    // Wait for the character to be created: the UI leaves the empty-editor state
+    // (a character card/detail appears, or the description input resets with
+    // content elsewhere). Return the extracted character info.
+    let created = false;
+    try {
+      await this.waitForPredicate(() => {
+        const urlChanged = !/\/character$/.test(window.location.pathname);
+        const detail = document.querySelector('[class*="character-detail"], [class*="character-card"]');
+        if (urlChanged || detail) return true;
+        // The editor may reset to placeholder when creation starts listing
+        const placeholder = document.querySelector('.prosemirror-placeholder');
+        return false;
+      }, timeoutMs, 2500);
+      created = true;
+    } catch (e) {
+      // timeout — return current state snapshot anyway
+    }
+    await this.delay(1500);
+
+    const texts = Array.from(
+      document.querySelectorAll('[class*="name"], [class*="title"], [class*="character-card"], h1, h2, h3')
+    )
+      .filter((t) => t.offsetParent !== null)
+      .slice(0, 15)
+      .map((t) => (t.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80))
+      .filter(Boolean);
+
+    return { created, url: window.location.pathname, texts };
+  },
+
+  /**
    * List characters defined in the project (sidebar "캐릭터" / "Characters" tab).
    * Clicks the sidebar tab and collects the character tiles.
    */
   async listCharactersFromPage() {
-    const sidebarBtn = this.visibleButtons().find((b) => {
-      const text = (b.textContent || '').replace(/\s+/g, ' ').trim();
-      const aria = (b.getAttribute('aria-label') || '');
-      return /캐릭터|character|personnage/i.test(text) || /캐릭터|characters?$/i.test(aria);
-    });
-
-    if (!sidebarBtn) {
-      // Not in a project or the sidebar is collapsed
-      return { inProject: window.location.href.includes('/project/'), characters: [] };
+    const page = await this.openCharactersPage();
+    if (page === 'create_page') {
+      return { inProject: true, page, characters: [] };
     }
 
-    sidebarBtn.click();
-    await this.delay(1500);
+    // List page: collect character cards (name + optional description)
+    const cards = Array.from(
+      document.querySelectorAll('[class*="character-card"], [class*="character-tile"], [class*="preset-card-host"]')
+    ).filter((c) => c.offsetParent !== null);
 
-    // Character tiles: grab candidate labels after navigation
-    const labels = new Set();
-    Array.from(document.querySelectorAll('[role="listitem"], li, article, [class*="tile"], [class*="card"]')).forEach(
-      (el) => {
+    const characters = [];
+    const seen = new Set();
+    cards.forEach((card) => {
+      const label = this.cleanLabel(card.textContent);
+      if (!label || seen.has(label)) return;
+      seen.add(label);
+      characters.push({ label: label.slice(0, 100) });
+    });
+
+    // Fallback: generic tiles with names near the sidebar content area
+    if (characters.length === 0) {
+      Array.from(document.querySelectorAll('li, article, [class*="tile"], [class*="card"]')).forEach((el) => {
         if (!el.offsetParent) return;
         const text = this.cleanLabel(el.textContent);
-        if (text && text.length <= 60 && !/전체 미디어|all media|장면|scene|도구|tools|휴지통|trash/i.test(text)) {
-          labels.add(text);
+        if (
+          text &&
+          text.length <= 60 &&
+          !/전체 미디어|all media|장면|scene|도구|tools|휴지통|trash|캐릭터|characters?|이미지|image/i.test(text) &&
+          !seen.has(text)
+        ) {
+          seen.add(text);
+          characters.push({ label: text });
         }
-      }
-    );
+      });
+    }
 
-    return {
-      inProject: window.location.href.includes('/project/'),
-      characters: [...labels].slice(0, 50)
-    };
+    return { inProject: window.location.href.includes('/project/'), page, characters: characters.slice(0, 50) };
+  },
+
+  /**
+   * Delete a character by label substring: open its detail page and use the
+   * 휴지통 (delete) button there, confirming the dialog.
+   */
+  async deleteCharacter(name) {
+    await this.openCharacterDetail(name);
+    return await this.deleteCurrentCharacter();
+  },
+
+  /**
+   * Rename a character by label substring.
+   */
+  async renameCharacter(name, newName, personality) {
+    await this.openCharacterDetail(name);
+    return await this.renameCurrentCharacter(newName, personality);
   },
 
   /**
@@ -832,6 +1091,255 @@ const FlowActions = {
     const minHits = distinctive.length >= 2 ? 2 : 1;
     const matched = scored.filter((s) => s.hits >= minHits && !/\.(jpg|jpeg|png|webp)$/i.test(s.label));
     return matched.map((s) => s.item);
+  },
+
+  // ------------------------------------------------------------------
+  // Add menu (ingredient picker) helpers
+  // ------------------------------------------------------------------
+
+  async openAddMenu() {
+    // Close any leftover menu first — clicking + toggles the menu, so a stale
+    // open state would close it instead of opening.
+    if (document.querySelector('[role="option"], [role="dialog"]')) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await this.delay(600);
+    }
+    const plusBtn = this.visibleButtons().find((b) =>
+      /소재 추가|프롬프트 상자에/i.test(b.getAttribute('aria-label') || '')
+    );
+    if (!plusBtn) throw new Error('Ingredient (+) menu button not found in the prompt bar');
+    plusBtn.click();
+    try {
+      await this.waitForPredicate(
+        () => document.querySelectorAll('[role="option"]').length > 0 || !!document.querySelector('input[type="file"]'),
+        8000,
+        300
+      );
+    } catch (err) {
+      // One retry after a clean escape: the first click may have toggled a
+      // stale menu closed.
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await this.delay(600);
+      plusBtn.click();
+      await this.waitForPredicate(
+        () => document.querySelectorAll('[role="option"]').length > 0 || !!document.querySelector('input[type="file"]'),
+        8000,
+        300
+      );
+    }
+    // Asset rows can lazy-load after the menu opens
+    try {
+      await this.waitForPredicate(() => document.querySelectorAll('[role="option"]').length > 0, 6000, 300);
+    } catch (err) {
+      // upload-only projects have no rows; fine
+    }
+    await this.delay(400);
+    return plusBtn;
+  },
+
+  async closeOverlays() {
+    for (let i = 0; i < 3; i++) {
+      const dialog = document.querySelector('[role="dialog"]');
+      if (!dialog) break;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await this.delay(400);
+    }
+  },
+
+  /**
+   * List the assets shown in the ingredient picker (uploads + generations)
+   */
+  async listAssets() {
+    await this.openAddMenu();
+    const options = Array.from(document.querySelectorAll('[role="option"]')).filter(
+      (o) => o.offsetParent !== null
+    );
+    const assets = options.map((o, idx) => {
+      const label = this.cleanLabel(o.textContent)
+        .replace(/\s*-\d{2}-\d{2}T[\d-]+Z/g, (m) => m) // keep timestamps intact
+        .replace(/(이미지|동영상|image|video)\s*$/i, '')
+        .trim();
+      return { index: idx + 1, label: label || `asset-${idx + 1}` };
+    });
+    await this.closeOverlays();
+    return assets;
+  },
+
+  /**
+   * Attach an existing project asset as an ingredient by label substring or
+   * 1-based index (as returned by listAssets()).
+   */
+  async attachAssetAsIngredient(query) {
+    await this.openAddMenu();
+    const options = Array.from(document.querySelectorAll('[role="option"]')).filter(
+      (o) => o.offsetParent !== null
+    );
+    if (options.length === 0) {
+      await this.closeOverlays();
+      throw new Error('The asset list is empty — upload or generate media first');
+    }
+
+    let target = null;
+    if (/^\d+$/.test(String(query).trim())) {
+      target = options[parseInt(query, 10) - 1];
+    } else {
+      const q = String(query).trim().toLowerCase();
+      target = options.find((o) => (o.textContent || '').toLowerCase().includes(q));
+    }
+    if (!target) {
+      await this.closeOverlays();
+      throw new Error(`Asset not found in the picker: ${query}`);
+    }
+
+    const label = this.cleanLabel(target.textContent)
+      .replace(/(이미지|동영상|image|video)\s*$/i, '')
+      .trim();
+    target.click();
+    await this.delay(900);
+
+    // Confirm with the "프롬프트에 추가" button if the picker requires it
+    const addBtn = this.visibleButtons().find((b) =>
+      /프롬프트에 추가|add to prompt/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || ''))
+    );
+    if (addBtn) {
+      addBtn.click();
+      await this.delay(1200);
+    }
+    await this.closeOverlays();
+
+    const box = document.querySelector('flow-base-prompt-box');
+    const chip =
+      box &&
+      (box.querySelector('img, [style*="background-image"]') ||
+        Array.from(box.querySelectorAll('button')).find((b) =>
+          /삭제|remove|지우기/i.test(b.getAttribute('aria-label') || '')
+        ));
+    return { attached: !!chip, asset: label };
+  },
+
+  /**
+   * Probe: dump the add-menu structure while in the current mode (image/video).
+   * Used to discover frame slots and other video-specific pickers.
+   */
+  async probeAddMenu() {
+    await this.openAddMenu();
+    const dump = {
+      menus: Array.from(
+        document.querySelectorAll('[role="menu"], [role="listbox"], [role="dialog"], [role="menuitem"], [role="option"], [role="tab"], [role="tabpanel"], button')
+      )
+        .filter((m) => m.offsetParent !== null)
+        .slice(0, 60)
+        .map((m) => ({
+          tag: m.tagName.toLowerCase(),
+          role: m.getAttribute('role'),
+          aria: (m.getAttribute('aria-label') || '').slice(0, 80),
+          text: (m.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+        })),
+      fileInputs: document.querySelectorAll('input[type="file"]').length
+    };
+    await this.closeOverlays();
+    return dump;
+  },
+
+  /**
+   * Find a clickable sidebar/nav element by its visible label (the nav uses
+   * plain divs, not <button>, so query beyond buttons).
+   */
+  findNavElement(labelRe) {
+    const candidates = Array.from(
+      document.querySelectorAll('button, [role="button"], [role="tab"], a, div[tabindex], li, mat-list-item, [class*="nav"] *')
+    );
+    return candidates.find((el) => {
+      if (!el.offsetParent) return false;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      // Match leaf-ish elements only (avoid giant ancestors that contain the label)
+      if (!labelRe.test(t) || t.length > 25) return false;
+      return true;
+    });
+  },
+
+  /**
+   * Probe: open the character sidebar tab and dump the panel structure.
+   */
+  async probeCharacters() {
+    const tab = this.findNavElement(/^(캐릭터|characters?)$/i) || this.findNavElement(/캐릭터|characters?/i);
+    if (!tab) throw new Error('Characters sidebar tab not found (open a project first)');
+    tab.click();
+    await this.delay(2000);
+
+    const dump = {
+      buttons: this.visibleButtons()
+        .slice(0, 60)
+        .map((b) => ({
+          aria: (b.getAttribute('aria-label') || '').slice(0, 60),
+          text: (b.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+        })),
+      texts: Array.from(document.querySelectorAll('[class*="title"], h1, h2, h3, [class*="name"], [class*="card"], [class*="tile"]'))
+        .filter((t) => t.offsetParent !== null)
+        .slice(0, 30)
+        .map((t) => ({ cls: (t.className || '').toString().slice(0, 40), text: (t.textContent || '').trim().slice(0, 60) }))
+    };
+    return dump;
+  },
+
+  /**
+   * Probe: from the characters panel, open the create-character dialog
+   * ("프로젝트에서 추가" = base it on an existing project asset) and dump fields.
+   */
+  async probeCharacterCreate() {
+    // ensure characters tab open
+    const tab = this.findNavElement(/^(캐릭터|characters?)$/i) || this.findNavElement(/캐릭터|characters?/i);
+    if (!tab) throw new Error('Characters sidebar tab not found');
+    tab.click();
+    await this.delay(1500);
+
+    const addBtn =
+      this.visibleButtons().find((b) => /프로젝트에서 추가/i.test(b.textContent || '')) ||
+      this.findNavElement(/프로젝트에서 추가/i);
+    if (!addBtn) throw new Error('"프로젝트에서 추가" button not found');
+    addBtn.click();
+    await this.delay(2000);
+
+    return this.dumpDialogFields();
+  },
+
+  /**
+   * Dump all visible fields inside the topmost dialog (inputs, textareas,
+   * contenteditables, buttons).
+   */
+  dumpDialogFields() {
+    const dialog =
+      Array.from(document.querySelectorAll('[role="dialog"], mat-dialog-container, .cdk-overlay-container [class*="dialog"]'))
+        .filter((d) => d.offsetParent !== null)
+        .pop() || document;
+
+    const fields = Array.from(
+      dialog.querySelectorAll('input, textarea, [contenteditable="true"], [role="textbox"]')
+    )
+      .filter((el) => el.offsetParent !== null || el.isContentEditable)
+      .map((el) => ({
+        tag: el.tagName.toLowerCase(),
+        type: el.getAttribute('type'),
+        aria: (el.getAttribute('aria-label') || '').slice(0, 60),
+        placeholder: (el.getAttribute('placeholder') || '').slice(0, 60),
+        classes: (el.className || '').toString().slice(0, 60),
+        value: (el.value || el.textContent || '').slice(0, 40)
+      }));
+
+    const buttons = Array.from(dialog.querySelectorAll('button, [role="button"]'))
+      .filter((b) => b.offsetParent !== null)
+      .map((b) => ({
+        aria: (b.getAttribute('aria-label') || '').slice(0, 60),
+        text: (b.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+        disabled: b.disabled || b.getAttribute('aria-disabled') === 'true'
+      }));
+
+    const headings = Array.from(dialog.querySelectorAll('h1, h2, h3, [class*="title"], label'))
+      .filter((t) => t.offsetParent !== null)
+      .slice(0, 20)
+      .map((t) => (t.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60));
+
+    return { fields, buttons, headings };
   },
 
   /**
