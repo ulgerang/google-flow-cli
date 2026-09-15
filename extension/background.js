@@ -157,6 +157,79 @@ function bytesToDataUrl(bytes, mimeType) {
   return `data:${mimeType || 'application/octet-stream'};base64,` + btoa(binary);
 }
 
+// Inject a local file into Flow's file chooser through the DevTools protocol.
+// Flow's upload entries open a file chooser (input.click / showOpenFilePicker);
+// with interception enabled the chooser never opens and we set the file directly.
+function stageFileViaFileChooser(tabId, filePath, clickAction) {
+  return new Promise((resolve, reject) => {
+    const target = { tabId };
+    let backendNodeId = null;
+    let done = false;
+
+    const onEvent = (src, method, params) => {
+      if (method === 'Page.fileChooserRequested' && params && params.backendNodeId && !done) {
+        backendNodeId = params.backendNodeId;
+      }
+    };
+    const timeout = setTimeout(() => {
+      if (!done) {
+        done = true;
+        cleanup();
+        reject(new Error('Flow did not trigger a file chooser within 12s'));
+      }
+    }, 12000);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      chrome.debugger.onEvent.removeListener(onEvent);
+      chrome.debugger.detach(target, () => void chrome.runtime.lastError);
+    };
+
+    chrome.debugger.onEvent.addListener(onEvent);
+    chrome.debugger.attach(target, '1.3', () => {
+      if (chrome.runtime.lastError) {
+        done = true;
+        cleanup();
+        reject(new Error('debugger attach: ' + chrome.runtime.lastError.message));
+        return;
+      }
+      const cmd = (method, params) =>
+        new Promise((res, rej) =>
+          chrome.debugger.sendCommand(target, method, params || {}, (r) =>
+            chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res(r)
+          )
+        );
+
+      (async () => {
+        await cmd('Page.enable');
+        await cmd('Page.setInterceptFileChooserDialog', { enabled: true });
+        // Ask the content script to click through to the upload entry
+        await new Promise((res, rej) => {
+          chrome.tabs.sendMessage(tabId, { action: clickAction, payload: {} }, (response) => {
+            if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
+            else if (response && response.success === false) rej(new Error(response.error || 'click failed'));
+            else res(response);
+          });
+        });
+        while (!backendNodeId && !done) {
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        if (done) return; // timed out
+        await cmd('DOM.setFileInputFiles', { files: [filePath], backendNodeId });
+        done = true;
+        cleanup();
+        resolve({ staged: true });
+      })().catch((err) => {
+        if (!done) {
+          done = true;
+          cleanup();
+          reject(err);
+        }
+      });
+    });
+  });
+}
+
 // Inject a local file into the page's file input through the DevTools protocol.
 function debuggerCommand(target, method, params) {
   return new Promise((resolve, reject) => {
@@ -529,6 +602,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await attachFileViaDebugger(tab.id, message.payload.filePath);
         const filled = await sendToContent('wait_frame_filled', { slot: message.payload.slot, timeoutMs: 30000 });
         sendResponse({ filled: !!(filled && filled.filled), slot: message.payload.slot });
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
+    })();
+    return true; // async sendResponse
+  }
+
+  if (message.type === 'BG_STAGE_FRAME_FILE') {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
+        if (tabs.length === 0) throw new Error('No Google Flow tab is open');
+        const tab = tabs[0];
+        const result = await stageFileViaFileChooser(tab.id, message.payload.filePath, 'click_media_upload_entry');
+        sendResponse(result);
       } catch (err) {
         sendResponse({ error: err.message });
       }

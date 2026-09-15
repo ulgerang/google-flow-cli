@@ -286,31 +286,33 @@
           if (duration) await FlowActions.selectDuration(duration);
           if (outputs) await FlowActions.selectOutputs(outputs);
 
-          // 3b. Fill frame slots (시작 → 종료). File specs are uploaded to the
-          // project assets through the + menu first (frame slots only accept
-          // asset picks), then picked by file name.
+          // 3b. Fill frame slots (시작 → 종료). Local files are staged as
+          // PROJECT assets through the top-bar upload (attaches nothing to the
+          // prompt bar), then each slot picks the staged asset by file name.
           const attachedFrames = [];
           if (frameSpecs.length) {
             for (const spec of frameSpecs.filter((s) => s.type === 'file')) {
-              await new Promise((resolve, reject) => {
-                chrome.runtime.sendMessage(
-                  { type: 'BG_ATTACH_REF', payload: { filePath: spec.path } },
-                  (resp) => {
-                    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                    else if (resp && resp.error) reject(new Error(resp.error));
-                    else resolve(resp);
-                  }
-                );
-              }).catch((uploadErr) => {
-                console.warn('[Flow-CLI] Frame file upload failed:', uploadErr.message);
-              });
-              spec.query = spec.name; // uploaded asset is labeled with the file name
+              try {
+                await new Promise((resolve, reject) => {
+                  chrome.runtime.sendMessage(
+                    { type: 'BG_STAGE_FRAME_FILE', payload: { filePath: spec.path } },
+                    (resp) => {
+                      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                      else if (resp && resp.error) reject(new Error(resp.error));
+                      else resolve(resp);
+                    }
+                  );
+                });
+              } catch (stageErr) {
+                throw new Error('프레임 파일 스테이징 실패: ' + stageErr.message);
+              }
+              // Close the media menu that remains open after the intercepted upload
+              await FlowActions.closeOverlays();
+              await FlowActions.delay(800);
+              await FlowActions.waitAssetByName(spec.name, 30000).catch(() => null);
+              spec.query = spec.name;
               spec.type = 'asset';
-              await FlowActions.delay(3000); // let the asset finish processing
             }
-            // The uploads also landed as ingredient chips — clear them so only
-            // the frame slots drive the generation.
-            await FlowActions.removeIngredientChips().catch(() => null);
             await FlowActions.selectFrameMode();
             for (const spec of frameSpecs) {
               try {
@@ -654,6 +656,46 @@
 
       case 'dump_dialog':
         runAsync(async () => FlowActions.dumpDialogFields());
+        return true;
+
+      case 'open_project_upload':
+        runAsync(async () => FlowActions.openProjectUpload());
+        return true;
+
+      case 'click_media_upload_entry':
+        runAsync(async () => {
+          // Click the top-bar 미디어 메뉴 추가, then its 업로드 entry. The file
+          // chooser is intercepted by the background (Page.fileChooserRequested).
+          const addBtn = FlowActions.visibleButtons().find((b) =>
+            /미디어 메뉴 추가|add media/i.test(b.getAttribute('aria-label') || '')
+          );
+          if (!addBtn) throw new Error('프로젝트 미디어 추가 버튼을 찾을 수 없습니다');
+          addBtn.click();
+          await FlowActions.delay(1000);
+          const entry =
+            FlowActions.visibleButtons().find((b) =>
+              /미디어 업로드|upload media/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || ''))
+            ) ||
+            Array.from(document.querySelectorAll('mat-list-item, [role="menuitem"], button')).find(
+              (el) => el.offsetParent !== null && /업로드|upload/i.test((el.textContent || '').trim())
+            );
+          if (!entry) throw new Error('업로드 항목을 찾을 수 없습니다');
+          entry.click();
+          await FlowActions.delay(500);
+          return { clicked: true };
+        });
+        return true;
+
+      case 'probe_media_menu':
+        runAsync(async () => FlowActions.probeMediaMenu());
+        return true;
+
+      case 'wait_asset_by_name':
+        runAsync(async () => {
+          const { fileName, timeoutMs = 30000 } = payload || {};
+          if (!fileName) throw new Error('wait_asset_by_name requires payload.fileName');
+          return await FlowActions.waitAssetByName(fileName, timeoutMs);
+        });
         return true;
 
       case 'select_frame_slot':

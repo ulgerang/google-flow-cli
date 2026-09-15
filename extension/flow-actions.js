@@ -80,7 +80,17 @@ const FlowActions = {
   async ensureProject(projectName) {
     const currentUrl = window.location.href;
     if (currentUrl.includes('/project/')) {
-      return { status: 'already_in_project', url: currentUrl };
+      // A media detail overlay (…/edit/…) hides the editor prompt bar — close it
+      if (/\/edit\/[a-f0-9-]+/i.test(currentUrl)) {
+        const back = this.visibleButtons().find((b) =>
+          /뒤로|back/i.test(b.getAttribute('aria-label') || '')
+        );
+        if (back) {
+          back.click();
+          await this.delay(1500);
+        }
+      }
+      return { status: 'already_in_project', url: window.location.href };
     }
 
     // "New project" tile — locale tolerant (KO/EN/FR/JA)
@@ -1222,6 +1232,15 @@ const FlowActions = {
       if (!startChip) throw err;
       startChip.click();
       await this.delay(1100);
+      try {
+        await this.waitForPredicate(
+          () => document.querySelectorAll('[role="option"]').length > 0,
+          8000,
+          300
+        );
+      } catch (e) {
+        /* picker may stay empty briefly; collect what is there */
+      }
     }
     const options = Array.from(document.querySelectorAll('[role="option"]')).filter(
       (o) => o.offsetParent !== null
@@ -1311,6 +1330,78 @@ const FlowActions = {
     };
     await this.closeOverlays();
     return dump;
+  },
+
+  /**
+   * Upload a local file as a PROJECT asset (top-bar 미디어 메뉴 추가) — unlike
+   * the prompt-box upload this does NOT attach an ingredient chip, so it is the
+   * right way to stage frame files before frames-to-video.
+   */
+  async openProjectUpload() {
+    const addBtn = this.visibleButtons().find((b) =>
+      /미디어 메뉴 추가|add media/i.test(b.getAttribute('aria-label') || '')
+    );
+    if (!addBtn) throw new Error('프로젝트 미디어 추가 버튼을 찾을 수 없습니다');
+    addBtn.click();
+    await this.delay(900);
+
+    let input = document.querySelector('input[type="file"]');
+    if (!input) {
+      const uploadEntry = this.visibleButtons().find((b) =>
+        /업로드|upload/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || ''))
+      );
+      if (uploadEntry) {
+        uploadEntry.click();
+        await this.delay(900);
+      }
+      input = await this.waitForPredicate(() => document.querySelector('input[type="file"]'), 8000, 250);
+    }
+    return { fileInput: !!input };
+  },
+
+  async probeMediaMenu() {
+    const addBtn = this.visibleButtons().find((b) =>
+      /미디어 메뉴 추가|add media/i.test(b.getAttribute('aria-label') || '')
+    );
+    if (!addBtn) throw new Error('add media button not found');
+    addBtn.click();
+    await this.delay(1300);
+    const dump = {
+      entries: Array.from(
+        document.querySelectorAll('[role="menu"], [role="menuitem"], [role="dialog"], button, a, mat-list-item')
+      )
+        .filter((m) => m.offsetParent !== null)
+        .slice(0, 40)
+        .map((m) => ({
+          tag: m.tagName.toLowerCase(),
+          role: m.getAttribute('role'),
+          aria: (m.getAttribute('aria-label') || '').slice(0, 60),
+          text: (m.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+        })),
+      fileInputs: document.querySelectorAll('input[type="file"]').length
+    };
+    return dump;
+  },
+
+  /**
+   * Wait until a project asset whose label contains fileName appears in the grid.
+   */
+  async waitAssetByName(fileName, timeoutMs = 30000) {
+    const base = String(fileName).toLowerCase().slice(0, 24);
+    await this.waitForPredicate(() => {
+      const tiles = Array.from(document.querySelectorAll('img')).filter(
+        (img) => (img.naturalWidth > 100 || img.width > 100) && img.offsetParent !== null
+      );
+      return tiles.some((img) => {
+        let el = img.parentElement;
+        for (let d = 0; d < 6 && el; d++) {
+          if ((el.textContent || '').toLowerCase().includes(base)) return true;
+          el = el.parentElement;
+        }
+        return false;
+      });
+    }, timeoutMs, 800);
+    return { assetVisible: true };
   },
 
   /**
