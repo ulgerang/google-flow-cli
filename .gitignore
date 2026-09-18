@@ -5,3 +5,4 @@ test_output/
 .DS_Store
 Thumbs.db
 dump_tmp.json
+.video_agent/
