@@ -113,7 +113,11 @@ function scheduleReconnect() {
 async function getOrOpenFlowTab(openIfNeeded = true, { focus = false } = {}) {
   const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
   if (tabs.length > 0) {
-    const tab = tabs[0];
+    // Prefer a tab that is inside a project: after a background discard or
+    // SPA restore a Flow tab can sit at the root, where most content actions
+    // fail ("not inside a project") even though another tab is usable.
+    const inProject = tabs.filter((t) => /\/project\//.test(t.url || ''));
+    const tab = (inProject.length ? inProject : tabs)[0];
     if (focus) {
       await chrome.tabs.update(tab.id, { active: true });
     }
@@ -449,7 +453,17 @@ async function handleBridgeMessage(msg) {
     // Content script can only fetch same-origin media; route the rest here.
     if ((srcHost && srcHost !== 'flow.google.com' && srcHost !== 'labs.google') || (!srcHost && payload?.uuid && !payload?.src)) {
       try {
-        const result = await fetchMediaInBackground(payload || {});
+        const mediaPayload = { ...payload };
+        // A bare UUID can only construct an unsigned flow-content.google
+        // URL, which the CDN rejects with 401. Resolve the tile's currently
+        // signed src from the page first.
+        if (!mediaPayload.src && mediaPayload.uuid) {
+          const resolved = await dispatchContentAction('list_media', {}, id);
+          const items = resolved?.response?.result?.items || [];
+          const hit = items.find((i) => i.uuid === mediaPayload.uuid && i.src);
+          if (hit) mediaPayload.src = hit.src;
+        }
+        const result = await fetchMediaInBackground(mediaPayload);
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'JOB_RESULT', id, success: true, result }));
         }
@@ -480,42 +494,18 @@ async function handleBridgeMessage(msg) {
 
   // Get or open Flow tab for content actions
   try {
-    const tab = await getOrOpenFlowTab(true);
-    if (!tab) {
-      throw new Error('Unable to find or open Google Flow tab');
+    const result = await dispatchContentAction(action, payload, id);
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(
+        JSON.stringify({
+          type: 'JOB_RESULT',
+          id,
+          success: result.response ? (result.response.success ?? false) : false,
+          result: result.response?.result,
+          error: result.error || result.response?.error
+        })
+      );
     }
-
-    log(`Dispatching action "${action}" to Flow tab ${tab.id}`);
-
-    // Send action to content script
-    chrome.tabs.sendMessage(tab.id, { action, payload, id }, (response) => {
-      if (chrome.runtime.lastError) {
-        log(`Content script error on ${action}`, chrome.runtime.lastError.message);
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(
-            JSON.stringify({
-              type: 'JOB_RESULT',
-              id,
-              success: false,
-              error: `Content script not ready or error: ${chrome.runtime.lastError.message}. Please refresh the Google Flow page.`
-            })
-          );
-        }
-        return;
-      }
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({
-            type: 'JOB_RESULT',
-            id,
-            success: response?.success ?? false,
-            result: response?.result,
-            error: response?.error
-          })
-        );
-      }
-    });
   } catch (err) {
     log(`Error handling bridge message: ${err.message}`);
     if (socket && socket.readyState === WebSocket.OPEN) {
@@ -529,6 +519,73 @@ async function handleBridgeMessage(msg) {
       );
     }
   }
+}
+
+/**
+ * Send a content action to the best Flow tab. A tab whose content script is
+ * missing ("Receiving end does not exist" — e.g. a tab opened before the
+ * extension was installed, or restored after a background discard) is skipped
+ * in favour of other candidates, and as a last resort the tab is reloaded once
+ * to re-inject the content scripts.
+ */
+async function dispatchContentAction(action, payload, id) {
+  const sendTo = (tabId) =>
+    new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { action, payload, id }, (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ error: chrome.runtime.lastError.message });
+        } else {
+          resolve({ response });
+        }
+      });
+    });
+
+  let tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
+  if (tabs.length === 0) {
+    const opened = await getOrOpenFlowTab(true);
+    if (!opened) return { error: 'Unable to find or open Google Flow tab' };
+    tabs = [opened];
+  }
+
+  // Tabs inside a project first (see getOrOpenFlowTab), then the rest.
+  const inProject = tabs.filter((t) => /\/project\//.test(t.url || ''));
+  const ordered = inProject.concat(tabs.filter((t) => !inProject.includes(t)));
+
+  for (const tab of ordered) {
+    log(`Dispatching action "${action}" to Flow tab ${tab.id}`);
+    const { error, response } = await sendTo(tab.id);
+    if (!error) return { response };
+    log(`Content script error on ${action} (tab ${tab.id})`, error);
+  }
+
+  // Nobody answered: reload the best candidate to re-inject the content script.
+  const tab = ordered[0];
+  log(`Reloading Flow tab ${tab.id} to re-inject the content script`);
+  try {
+    await chrome.tabs.reload(tab.id);
+  } catch (e) {
+    return { error: `Content script not ready or error: no Flow tab responded (${e.message})` };
+  }
+  await new Promise((resolve) => {
+    const listener = (tabId, info) => {
+      if (tabId === tab.id && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 15000);
+  });
+  await new Promise((r) => setTimeout(r, 2000));
+
+  const { error, response } = await sendTo(tab.id);
+  if (!error) return { response };
+  return {
+    error: `Content script not ready or error: ${error}. Please refresh the Google Flow page.`
+  };
 }
 
 // Forward content script events (e.g. progress) to CLI bridge

@@ -50,6 +50,7 @@ ${chalk.gray('----------------------------------------')}
         confirm
       },
       {
+        timeoutMs: Math.max(60, parseInt(options.timeout, 10) || 600) * 1000,
         onStatusUpdate: (msg) => {
           spinner.text = msg;
         }

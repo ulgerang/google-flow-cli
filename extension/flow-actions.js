@@ -69,8 +69,17 @@ const FlowActions = {
   /**
    * Dispatches synthetic events to trigger framework reactive updates
    */
-  dispatchInputEvents(element) {
-    element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+  dispatchInputEvents(element, text = '') {
+    try {
+      element.dispatchEvent(
+        new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text })
+      );
+    } catch (e) {}
+    try {
+      element.dispatchEvent(
+        new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text })
+      );
+    } catch (e) {}
     element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
   },
 
@@ -135,7 +144,7 @@ const FlowActions = {
       const aria = b.getAttribute('aria-label') || '';
       if (/설정\s*트리거|settings|param[eè]tres?/i.test(aria)) return true;
       const t = (b.textContent || '').replace(/\s+/g, ' ');
-      return /x\d/i.test(t) && /(Nano|Banana|Imagen|Veo|Omni)/i.test(t);
+      return (/x\d/i.test(t) && /(Nano|Banana|Imagen|Veo|Omni)/i.test(t)) || /동영상\s*·/i.test(t) || /비디오/i.test(t);
     });
   },
 
@@ -146,16 +155,41 @@ const FlowActions = {
     // The settings panel is the only place exposing ratio/outputs radio groups.
     return radios.some((r) => {
       const t = (r.textContent || '').trim();
-      return /^\d+\s*:\s*\d+$/.test(t) || /^x\d+$/i.test(t) || /crop_\d+_\d+/.test(t);
+      return (
+        /^\d+\s*:\s*\d+$/.test(t) ||
+        /^x\d+$/i.test(t) ||
+        /crop_\d+_\d+/.test(t) ||
+        /\d+\s*(s|초|sec)/i.test(t) ||
+        /720p|1080p/i.test(t)
+      );
     });
   },
 
   async openSettings() {
     if (await this.isSettingsOpen()) return;
-    const trigger = await this.findSettingsTrigger();
+    // The prompt bar collapses to a "last prompt" pill after a generation or
+    // navigation; the collapsed pill's summary chip does not open the settings
+    // panel, so expand the bar before looking for the real trigger.
+    const expand = this.visibleButtons().find((b) =>
+      /프롬프트\s*펼치기|expand\s*prompt/i.test(b.getAttribute('aria-label') || '')
+    );
+    if (expand) {
+      expand.click();
+      await this.delay(700);
+    }
+    let trigger = await this.findSettingsTrigger();
     if (!trigger) throw new Error('Flow settings trigger button not found in the prompt bar');
     trigger.click();
-    await this.waitForPredicate(() => this.isSettingsOpen(), 8000, 300);
+    try {
+      await this.waitForPredicate(() => this.isSettingsOpen(), 8000, 300);
+    } catch (err) {
+      // Retry once: the first click can land while the expanded bar is still
+      // settling and get swallowed.
+      trigger = await this.findSettingsTrigger();
+      if (!trigger) throw err;
+      trigger.click();
+      await this.waitForPredicate(() => this.isSettingsOpen(), 8000, 300);
+    }
     await this.delay(300);
   },
 
@@ -204,7 +238,15 @@ const FlowActions = {
   async switchMode(mode = 'IMAGE') {
     const wantVideo = String(mode).toUpperCase() === 'VIDEO';
 
-    // The mode is also detectable when the panel is closed via the trigger text.
+    const trigger = await this.findSettingsTrigger();
+    if (trigger) {
+      const raw = (trigger.textContent || '').toLowerCase();
+      const isCurrentlyVideo = /videocam|동영상|video/i.test(raw);
+      if (wantVideo === isCurrentlyVideo) {
+        return { mode: wantVideo ? 'VIDEO' : 'IMAGE', switched: false, alreadyActive: true };
+      }
+    }
+
     await this.openSettings();
     const radios = this.panelRadios();
     const target = radios.find((r) => {
@@ -424,16 +466,22 @@ const FlowActions = {
 
     if (promptInput.hasAttribute('contenteditable')) {
       // ProseMirror keeps undo state; select-all + delete clears reliably.
-      document.execCommand('selectAll', false, null);
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(promptInput);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (e) {}
       document.execCommand('delete', false, null);
       const success = document.execCommand('insertText', false, promptText);
-      if (!success || !(promptInput.innerText || '').includes(promptText.slice(0, 40))) {
+      if (!success || !(promptInput.innerText || '').includes(promptText.slice(0, 20))) {
         promptInput.innerText = promptText;
       }
-      this.dispatchInputEvents(promptInput);
+      this.dispatchInputEvents(promptInput, promptText);
     } else {
       promptInput.value = promptText;
-      this.dispatchInputEvents(promptInput);
+      this.dispatchInputEvents(promptInput, promptText);
     }
 
     await this.delay(500);
@@ -510,6 +558,12 @@ const FlowActions = {
         seen.add(src);
         items.push({ src, uuid: uuidFromSrc(src), width: img.naturalWidth || img.width });
       }
+    });
+    Array.from(document.querySelectorAll('video')).forEach((v) => {
+      const src = v.currentSrc || v.src || '';
+      if (!src || src.startsWith('data:') || seen.has(src)) return;
+      seen.add(src);
+      items.push({ src, uuid: uuidFromSrc(src), isVideo: true });
     });
     return items;
   },
@@ -1246,10 +1300,15 @@ const FlowActions = {
       (o) => o.offsetParent !== null
     );
     const assets = options.map((o, idx) => {
-      const label = this.cleanLabel(o.textContent)
-        .replace(/\s*-\d{2}-\d{2}T[\d-]+Z/g, (m) => m) // keep timestamps intact
-        .replace(/(이미지|동영상|image|video)\s*$/i, '')
-        .trim();
+      // Each picker row is ".asset-title" (name) + ".type-subtitle" (이미지/동영상).
+      // Read the title span directly — cleaned whole-row text loses the name.
+      const title = o.querySelector('.asset-title');
+      let label = title ? (title.textContent || '').trim() : '';
+      if (!label) {
+        label = this.cleanLabel(o.textContent)
+          .replace(/(이미지|동영상|image|video)\s*$/i, '')
+          .trim();
+      }
       return { index: idx + 1, label: label || `asset-${idx + 1}` };
     });
     await this.closeOverlays();
@@ -1282,7 +1341,8 @@ const FlowActions = {
       throw new Error(`Asset not found in the picker: ${query}`);
     }
 
-    const label = this.cleanLabel(target.textContent)
+    const title = target.querySelector('.asset-title');
+    const label = (title ? title.textContent : this.cleanLabel(target.textContent))
       .replace(/(이미지|동영상|image|video)\s*$/i, '')
       .trim();
     target.click();

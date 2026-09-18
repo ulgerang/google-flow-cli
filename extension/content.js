@@ -7,6 +7,9 @@
   if (window.__FLOW_CLI_CONTENT_LOADED__) return;
   window.__FLOW_CLI_CONTENT_LOADED__ = true;
 
+  // DOM marker (visible from the page world) for debugging which build is live.
+  document.documentElement.setAttribute('data-flow-cli', 'patched-2026-09-18');
+
   console.log('[Flow-CLI] Content script initialized on:', window.location.href);
 
   // Notify background script that Flow tab is ready
@@ -71,8 +74,172 @@
             promptInputAvailable: !!document.querySelector(
               'div.ProseMirror[contenteditable="true"], [contenteditable="true"], textarea'
             ),
+            currentPrompt: (document.querySelector('div.ProseMirror[contenteditable="true"], [contenteditable="true"], textarea')?.innerText || '').slice(0, 100),
+            generateBtnState: (() => {
+              const b = FlowActions.visibleButtons().find((btn) => {
+                const aria = btn.getAttribute('aria-label') || '';
+                const text = (btn.textContent || '').trim();
+                return /생성\s*시작|generate|créer|create/i.test(aria) || text.includes('arrow_forward');
+              });
+              return b ? { found: true, disabled: b.disabled || b.getAttribute('aria-disabled'), aria: b.getAttribute('aria-label') } : { found: false };
+            })(),
             mediaCount: FlowActions.getMediaItems().length
           };
+        });
+        return true;
+
+      case 'get_video_url':
+        runAsync(async () => {
+          const firstCard = document.querySelector('a[href*="/edit/"]') || document.querySelector('img[src*="/asb/"]');
+          if (!firstCard) throw new Error('No media card found');
+          firstCard.click();
+          await FlowActions.delay(2000);
+
+          const video = document.querySelector('video');
+          const videoSrc = video ? (video.currentSrc || video.src) : null;
+          const downloadBtn = FlowActions.visibleButtons().find((b) =>
+            /다운로드|download/i.test(b.getAttribute('aria-label') || b.textContent)
+          );
+
+          return {
+            editUrl: window.location.href,
+            videoSrc,
+            hasDownloadBtn: !!downloadBtn,
+            allVideos: Array.from(document.querySelectorAll('video')).map((v) => v.currentSrc || v.src)
+          };
+        });
+        return true;
+
+      case 'click_download':
+        runAsync(async () => {
+          const downloadBtn = FlowActions.visibleButtons().find((b) =>
+            /다운로드|download/i.test(b.getAttribute('aria-label') || b.textContent)
+          );
+          if (!downloadBtn) throw new Error('Download button not found');
+          const info = {
+            tag: downloadBtn.tagName,
+            href: downloadBtn.getAttribute('href') || downloadBtn.href,
+            aria: downloadBtn.getAttribute('aria-label'),
+            text: downloadBtn.textContent.trim()
+          };
+          downloadBtn.click();
+          return { clicked: true, btn: info };
+        });
+        return true;
+
+      case 'inspect_flow_ui':
+        runAsync(async () => {
+          await FlowActions.openSettings().catch(() => null);
+          const radios = FlowActions.panelRadios().map((r) => ({
+            text: (r.textContent || '').trim(),
+            aria: r.getAttribute('aria-label'),
+            checked: r.getAttribute('aria-checked')
+          }));
+          const buttons = FlowActions.visibleButtons().map((b) => ({
+            text: (b.textContent || '').trim(),
+            aria: b.getAttribute('aria-label'),
+            disabled: b.disabled || b.getAttribute('aria-disabled')
+          }));
+          await FlowActions.closeSettings().catch(() => null);
+          return { radios, buttons: buttons.slice(0, 25), url: window.location.href };
+        });
+        return true;
+
+      case 'search_buttons':
+        runAsync(async () => {
+          const allButtons = Array.from(document.querySelectorAll('button, [role="button"], a')).map((b) => ({
+            tag: b.tagName,
+            text: (b.textContent || '').trim().replace(/\s+/g, ' '),
+            aria: b.getAttribute('aria-label') || '',
+            href: b.getAttribute('href') || ''
+          }));
+          return {
+            matching: allButtons.filter((b) =>
+              /동영상|비디오|영상|video|animate|재생|play|generate|생성/i.test(b.text + ' ' + b.aria)
+            ),
+            url: window.location.href
+          };
+        });
+        return true;
+
+      case 'play_and_get_video':
+        runAsync(async () => {
+          const playBtn = FlowActions.visibleButtons().find((b) =>
+            /재생|play_arrow/i.test(b.getAttribute('aria-label') || b.textContent)
+          );
+          if (playBtn) playBtn.click();
+          await FlowActions.delay(1000);
+          const video = document.querySelector('video');
+          return {
+            hasVideo: !!video,
+            src: video ? video.currentSrc || video.src : null,
+            paused: video ? video.paused : null
+          };
+        });
+        return true;
+
+      case 'inspect_download_menu':
+        runAsync(async () => {
+          const downloadBtn = FlowActions.visibleButtons().find((b) =>
+            /미디어 다운로드|다운로드|download/i.test(b.getAttribute('aria-label') || b.textContent)
+          );
+          if (downloadBtn) downloadBtn.click();
+          await FlowActions.delay(800);
+          const menuItems = Array.from(
+            document.querySelectorAll('[role="menuitem"], [role="option"], [role="menu"] *, [class*="menu"] *')
+          )
+            .filter((el) => el.offsetParent !== null && el.textContent.trim().length > 0)
+            .map((el) => ({
+              tag: el.tagName,
+              text: (el.textContent || '').trim().replace(/\s+/g, ' '),
+              aria: el.getAttribute('aria-label')
+            }));
+          return { menuItems: menuItems.slice(0, 20) };
+        });
+        return true;
+
+      case 'download_720p_video':
+        runAsync(async () => {
+          let interceptedUrl = null;
+
+          const origAnchorClick = HTMLAnchorElement.prototype.click;
+          HTMLAnchorElement.prototype.click = function () {
+            interceptedUrl = this.href;
+            return origAnchorClick.apply(this, arguments);
+          };
+
+          const origOpen = window.open;
+          window.open = function (url) {
+            interceptedUrl = url;
+            return origOpen.apply(this, arguments);
+          };
+
+          const downloadBtn = FlowActions.visibleButtons().find((b) =>
+            /미디어 다운로드|다운로드|download/i.test(b.getAttribute('aria-label') || b.textContent)
+          );
+          if (downloadBtn) downloadBtn.click();
+          await FlowActions.delay(800);
+
+          const items = Array.from(document.querySelectorAll('button, [role="menuitem"], flow-menu-item')).filter(
+            (el) => el.offsetParent !== null && /720p/i.test(el.textContent)
+          );
+          const target = items[0];
+          if (!target) {
+            HTMLAnchorElement.prototype.click = origAnchorClick;
+            window.open = origOpen;
+            throw new Error('720p download option not found in menu');
+          }
+          target.click();
+
+          for (let i = 0; i < 12; i++) {
+            if (interceptedUrl) break;
+            await FlowActions.delay(500);
+          }
+
+          HTMLAnchorElement.prototype.click = origAnchorClick;
+          window.open = origOpen;
+
+          return { interceptedUrl, targetText: target.textContent.trim() };
         });
         return true;
 
@@ -281,10 +448,11 @@
           }
 
           // 3. Model & ratio & duration & outputs
-          if (model) await FlowActions.selectModel(model);
-          if (!frames && ratio) await FlowActions.selectRatio(ratio);
-          if (duration) await FlowActions.selectDuration(duration);
-          if (outputs) await FlowActions.selectOutputs(outputs);
+          if (model) await FlowActions.selectModel(model).catch(() => null);
+          if (!frames && ratio) await FlowActions.selectRatio(ratio).catch(() => null);
+          if (duration) await FlowActions.selectDuration(duration).catch(() => null);
+          if (outputs) await FlowActions.selectOutputs(outputs).catch(() => null);
+          await FlowActions.closeSettings().catch(() => null);
 
           // 3b. Fill frame slots (시작 → 종료). Local files are staged as
           // PROJECT assets through the top-bar upload (attaches nothing to the
@@ -672,12 +840,24 @@
           if (!addBtn) throw new Error('프로젝트 미디어 추가 버튼을 찾을 수 없습니다');
           addBtn.click();
           await FlowActions.delay(1000);
+          // The menu also contains a LEFT-NAV CATEGORY whose label is just
+          // "업로드" (rendered as "drive_folder_upload 업로드"). Clicking that
+          // only switches the library tab and never opens a file chooser, so a
+          // loose /업로드/ match silently picks the wrong element. Require the
+          // full "미디어 업로드" label, and use getClientRects() because the real
+          // button sits in a fixed overlay where offsetParent is null.
+          const onScreen = (el) => el.getClientRects().length > 0;
+          const label = (el) =>
+            ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || ''))
+              .replace(/\s+/g, ' ')
+              .trim();
+          const candidates = Array.from(
+            document.querySelectorAll('button, [role="button"], [role="menuitem"], mat-list-item')
+          ).filter(onScreen);
           const entry =
-            FlowActions.visibleButtons().find((b) =>
-              /미디어 업로드|upload media/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || ''))
-            ) ||
-            Array.from(document.querySelectorAll('mat-list-item, [role="menuitem"], button')).find(
-              (el) => el.offsetParent !== null && /업로드|upload/i.test((el.textContent || '').trim())
+            candidates.find((el) => /미디어 업로드|upload media/i.test(label(el))) ||
+            candidates.find(
+              (el) => /업로드|upload/i.test(label(el)) && !/drive_folder_upload/i.test(label(el))
             );
           if (!entry) throw new Error('업로드 항목을 찾을 수 없습니다');
           entry.click();
@@ -715,8 +895,15 @@
 
       case 'fetch_media':
         runAsync(async () => {
-          const { src, uuid } = payload || {};
+          let { src, uuid } = payload || {};
           if (!src && !uuid) throw new Error('fetch_media requires payload.src or payload.uuid');
+          // A bare UUID makes the background construct an unsigned
+          // flow-content.google URL, which the CDN rejects with 401. Resolve
+          // the tile's currently signed src from the page first.
+          if (!src && uuid) {
+            const item = FlowActions.getMediaItems().find((i) => i.uuid === uuid);
+            if (item && item.src) src = item.src;
+          }
           return await FlowActions.fetchMediaDataUrl({ src, uuid });
         });
         return true;

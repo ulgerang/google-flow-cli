@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createRequire } from 'module';
 import { Command } from 'commander';
 import { handleStatus } from '../commands/status.js';
 import { handleOpen } from '../commands/open.js';
@@ -12,12 +13,14 @@ import { handleMedia } from '../commands/media.js';
 import { handleServe } from '../commands/serve.js';
 import { handleMcp } from '../commands/mcp.js';
 
+const pkg = createRequire(import.meta.url)('../../package.json');
+
 const program = new Command();
 
 program
   .name('flow')
   .description('Google Flow CLI - Generate AI images & videos via Chrome Extension bridge')
-  .version('1.0.0');
+  .version(pkg.version);
 
 // Global option
 program.option('--port <port>', 'Bridge server port', 58231);
@@ -71,6 +74,7 @@ program
   .option('--start-frame <value>', 'First frame: local image path or asset (index/label) — enables Frames-to-Video')
   .option('--end-frame <value>', 'Last frame: local image path or asset (index/label)')
   .option('--confirm', 'Confirm generation (consumes video credits)', false)
+  .option('-t, --timeout <seconds>', 'Max generation wait time in seconds', '600')
   .action(async (prompt, cmdOptions) => {
     const opts = { ...program.opts(), ...cmdOptions };
     await handleVideo(prompt, opts);
