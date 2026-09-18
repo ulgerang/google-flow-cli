@@ -107,13 +107,16 @@ function scheduleReconnect() {
   }, 2500);
 }
 
-// Ensure Flow tab is available
-async function getOrOpenFlowTab(openIfNeeded = true) {
+// Ensure Flow tab is available. Only focus/raise the tab when the caller
+// explicitly asks (e.g. `open_flow`); routine CLI actions must not steal
+// window focus from whatever the user is doing.
+async function getOrOpenFlowTab(openIfNeeded = true, { focus = false } = {}) {
   const tabs = await chrome.tabs.query({ url: FLOW_TAB_PATTERNS });
   if (tabs.length > 0) {
-    // Focus the first matching tab
     const tab = tabs[0];
-    await chrome.tabs.update(tab.id, { active: true });
+    if (focus) {
+      await chrome.tabs.update(tab.id, { active: true });
+    }
     return tab;
   }
 
@@ -122,7 +125,7 @@ async function getOrOpenFlowTab(openIfNeeded = true) {
   log('No Google Flow tab open. Opening new tab...');
   const newTab = await chrome.tabs.create({
     url: FLOW_HOME_URL,
-    active: true
+    active: focus
   });
 
   // Wait for tab to complete loading
@@ -461,7 +464,7 @@ async function handleBridgeMessage(msg) {
   }
 
   if (action === 'open_flow') {
-    const tab = await getOrOpenFlowTab(true);
+    const tab = await getOrOpenFlowTab(true, { focus: true });
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(
         JSON.stringify({
